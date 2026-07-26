@@ -57,3 +57,4 @@ dkms.conf
 # custome ignored files
 binfmt_elf.c
 .idea/
+src/main
