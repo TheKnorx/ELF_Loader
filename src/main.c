@@ -58,7 +58,7 @@ int open_and_parse_elf(elf_info_table_T* bin_infos, const char* filename) {
         PRINT_CUSTOM_ERROR("Program header table size if 0");
         goto ret;
     }
-    if (elf_header->e_phoff < file_size) {
+    if (elf_header->e_phoff > file_size) {
         PRINT_CUSTOM_ERROR("Program header table is beyond EOF");
         goto ret;
     }
