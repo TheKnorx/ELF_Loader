@@ -80,7 +80,7 @@ int open_and_parse_elf(bin_info_table_T* bin_infos, const char* filename) {
     return -errno;  // else we just return the error code
 }
 
-int allocate_segments(bin_info_table_T bin_infos) {
+int load_alloc_segments(bin_info_table_T bin_infos) {
     int retval = -EIO;  // we just make an I/O-Error the default here
 
     //...
