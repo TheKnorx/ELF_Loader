@@ -58,3 +58,5 @@ dkms.conf
 binfmt_elf.c
 .idea/
 src/main
+src/Test-ELF-Program
+src/Test-ELF-Program.o
