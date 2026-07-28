@@ -5,8 +5,8 @@
 #include <stdio.h>
 #include <stdlib.h>
 
-#define SAFE_ERRONO int _errno_saved = errno;
-#define UNSAFE_ERRNO errno = _errno_saved;
+#define PRESERVER_ERRONO int _errno_saved = errno;
+#define RESTORE_ERRNO errno = _errno_saved;
 
 // As a variadic argument we except format specifier for printf
 #define THROW_CUSTOM_ERROR(FORMAT_STR, ...) do { \
@@ -22,9 +22,9 @@
 
 // As a variadic argument we except format specifier for printf
 #define PRINT_CUSTOM_ERROR(FORMAT_STR, ...) do { \
-    SAFE_ERRONO  \
+    PRESERVER_ERRONO  \
     printf(FORMAT_STR, ##__VA_ARGS__);  \
-    UNSAFE_ERRNO  \
+    RESTORE_ERRNO  \
 } while (0);
 
 #define DEBUG(FORMAT_STR, ...) {printf(FORMAT_STR, ##__VA_ARGS__); putchar('\n');}
