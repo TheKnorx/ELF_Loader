@@ -13,10 +13,10 @@
 #define NOP __asm__("NOP")  // No-Operation - assembly instruction
 #define GET_PHDR_ENTRY(_e_phoff, _e_phentsize) (_e_phoff + i * _e_phentsize)
 
-typedef struct elf_info_table_S {
+typedef struct bin_info_table_S {
     Elf64_Ehdr* elf_header;
     Elf64_Phdr* prog_header_table;
-} elf_info_table_T;
+} bin_info_table_T;
 
 
 /**
@@ -27,7 +27,7 @@ typedef struct elf_info_table_S {
  * @param filename Path to and Filename of the ELF binary
  * @return Returns 0 if successful, an errno code if not successful
  */
-int open_and_parse_elf(elf_info_table_T* bin_infos, const char* filename) {
+int open_and_parse_elf(bin_info_table_T* bin_infos, const char* filename) {
     DEBUG("Parsing elf file");
     int retval = -ENOEXEC;
     errno = retval;
@@ -80,6 +80,22 @@ int open_and_parse_elf(elf_info_table_T* bin_infos, const char* filename) {
     return -errno;  // else we just return the error code
 }
 
+int allocate_segments(bin_info_table_T bin_infos) {
+    int retval = -EIO;  // we just make an I/O-Error the default here
+
+    //...
+
+    return 0;
+    ret:
+    if (-errno == retval) return retval;  // if the errno code is still the same from the beginning, return it
+    return -errno;  // else we just return the error code
+}
+
+void cleanup(const bin_info_table_T* bin_info) {
+    free(bin_info->prog_header_table);
+    free(bin_info->elf_header);
+}
+
 /**
  * Main function to start the loading and executing of the ELF binary
  *
@@ -90,7 +106,9 @@ int main(const int argc, char **argv) {
     DEBUG("Entering main");
     if (argc < 2) THROW_CUSTOM_ERROR("Usage: %s <path/to/ELF/binary>", *argv);
 
-    elf_info_table_T binary_infos = {};
+    bin_info_table_T binary_infos = {0};
     if (open_and_parse_elf(&binary_infos, argv[1]) < 0) THROW_ERROR("Failed to get ELF header information")
 
+
+    cleanup(&binary_infos);
 }
