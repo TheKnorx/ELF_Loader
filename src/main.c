@@ -58,15 +58,10 @@ int open_and_parse_elf(bin_info_table_T* bin_infos, const char* filename) {
 
     // get the elf file header
     Elf64_Ehdr* elf_header = calloc(1, ELF_HEADER_SIZE);
-    if (NULL == elf_header) {
-        PRINT_CUSTOM_ERROR("Failed to allocate space for the header-buffer");
-        goto ret;
-    }
+    if (NULL == elf_header) JMP_W_CERROR("Failed to allocate space for the efi-header-buffer", ret);
     bin_infos->elf_header = elf_header;
-    if (ELF_HEADER_SIZE != fread(elf_header, 1, ELF_HEADER_SIZE, elf_file_stream)) {
-        PRINT_CUSTOM_ERROR("Failed to read the elf header");
-        goto ret;
-    }
+    if (ELF_HEADER_SIZE != fread(elf_header, 1, ELF_HEADER_SIZE, elf_file_stream))
+        JMP_W_CERROR("Failed to read the elf header", ret);
 
     /* Do consistency-checks to make sure it's an actual ELF file and also if we can process it */
     /* First do the checks on the e_ident field */
@@ -104,6 +99,8 @@ int open_and_parse_elf(bin_info_table_T* bin_infos, const char* filename) {
         THROW_ERROR("Failed to seek in file - possibly because its too large for fseeko to handle");
     const Elf64_Word phdrtsize = elf_header->e_phentsize * elf_header->e_phnum;
     Elf64_Phdr* phdrtable = calloc(1, phdrtsize);  // program header table
+    if (NULL == phdrtable) JMP_W_CERROR("Failed to allocate space for the pogram-header-buffer", ret);
+
     bin_infos->prog_header_table = phdrtable;
     if (phdrtsize != fread(phdrtable, 1, phdrtsize, elf_file_stream))
         JMP_W_CERROR("Failed to read the program header table", ret);
