@@ -4,10 +4,7 @@
 #include <stdlib.h>
 #include <elf.h>
 #include <errno.h>
-#include <iso646.h>
-#include <limits.h>
 #include <string.h>
-#include <math.h>
 
 #include "common.h"
 
@@ -29,14 +26,14 @@ typedef struct bin_info_table_S {
  * @param fp file stream pointer to seek in
  * @param offset offset to seek within the file
  */
-void safe_fseek(FILE *fp, const Elf64_Off offset) {
-    if (offset > LONG_MAX) {
-        fseek(fp, LONG_MAX, SEEK_SET);
-        fseek(fp, (long)(offset - LONG_MAX), SEEK_CUR);
-    } else {
-        fseek(fp, (long)offset, SEEK_SET);
-    }
-}
+// void safe_fseek(FILE *fp, const Elf64_Off offset) {
+//     if (offset > LONG_MAX) {
+//         fseek(fp, LONG_MAX, SEEK_SET);
+//         fseek(fp, (long)(offset - LONG_MAX), SEEK_CUR);
+//     } else {
+//         fseek(fp, (long)offset, SEEK_SET);
+//     }
+// }
 
 /**
  * Function for opening and gathering information from the ELF binary, like checking its properties or
@@ -118,11 +115,15 @@ int open_and_parse_elf(bin_info_table_T* bin_infos, const char* filename) {
     return -errno;  // else we just return the error code
 }
 
-int load_alloc_segments(bin_info_table_T* bin_infos) {
+int load_alloc_segments(const bin_info_table_T* bin_infos) {
     int retval = -EIO;  // we just make an I/O-Error the default here
 
-    //...
-    bin_infos->elf_header = nullptr;
+    // iterate over the program header table and load the segments we need --> p_type=PT_LOAD
+    for (Elf64_Half i = 0; i<bin_infos->elf_header->e_phnum; i++) {
+        Elf64_Phdr phdr_entry = bin_infos->prog_header_table[i];  // get the next program header entry
+        if (PT_LOAD != phdr_entry.p_type) continue;
+        DEBUG("Found loadable segment at offset: %d\n", i);
+    }
     goto ret;
 
     return 0;
@@ -146,11 +147,24 @@ void cleanup(bin_info_table_T* bin_info) {
  */
 int main(const int argc, char **argv) {
     DEBUG("Entering main");
+    int retval = EXIT_SUCCESS;
     if (argc < 2) THROW_CUSTOM_ERROR("Usage: %s <path/to/ELF/binary>", *argv);
 
     bin_info_table_T binary_infos = {0};
-    if (open_and_parse_elf(&binary_infos, argv[1]) < 0) THROW_ERROR("Failed to get ELF header information")
+    if (0 > open_and_parse_elf(&binary_infos, argv[1])) {
+        PRINT_ERROR("Failed to load ELF header");
+        goto on_error;
+    }
 
+    if (0 > load_alloc_segments(&binary_infos)) {
+        PRINT_ERROR("Failed to load segments");
+        goto on_error;
+    }
 
+    do_cleanup:
     cleanup(&binary_infos);
+    return retval;
+    on_error:
+    retval = -EXIT_FAILURE;
+    goto do_cleanup;
 }

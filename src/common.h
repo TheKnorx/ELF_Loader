@@ -20,6 +20,12 @@
     exit(__VA_OPT__(+ 1 +) EXIT_FAILURE);  \
 } while (0);  // we should never get to this line
 
+#define PRINT_ERROR(INFO_STR) do {  \
+    PRESERVER_ERRNO  \
+    perror(INFO_STR);  \
+    RESTORE_ERRNO  \
+} while (0);
+
 // As a variadic argument we except format specifier for printf
 #define PRINT_CUSTOM_ERROR(FORMAT_STR, ...) do { \
     PRESERVER_ERRNO  \
