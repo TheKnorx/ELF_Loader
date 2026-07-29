@@ -1,10 +1,12 @@
 // Includes
 #define _FILE_OFFSET_BITS 64
+#include <assert.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <elf.h>
 #include <errno.h>
 #include <string.h>
+#include <sys/mman.h>
 
 #include "common.h"
 
@@ -13,10 +15,12 @@
 #define NOP __asm__("NOP")  // No-Operation - assembly instruction
 #define GET_PHDR_ENTRY(_e_phoff, _e_phentsize) (_e_phoff + i * _e_phentsize)
 // I know this macro is bad coding style, but it also helps massively in reducing duplicate code, so I take it
-#define JMP_W_CERROR(ERROR_STR, JMP_LABEL) {PRINT_CUSTOM_ERROR("Architecture is not 64-bit"); goto JMP_LABEL;}
+#define JMP_W_CERROR(ERROR_STR, JMP_LABEL) {PRINT_CUSTOM_ERROR(ERROR_STR); goto JMP_LABEL;}
+
+#define MAP_PHDR_FLAGS(PHDR_FLAGS) ()
 
 typedef struct bin_info_table_S {
-    Elf64_Addr* entrypoint;  // this maybe zero
+    Elf64_Addr  entrypoint;  // this maybe zero
     Elf64_Ehdr* elf_header;
     Elf64_Phdr* prog_header_table;
 } bin_info_table_T;
@@ -68,11 +72,11 @@ int open_and_parse_elf(bin_info_table_T* bin_infos, const char* filename) {
     // check the ELF magic number
     if (0 != memcmp(ELFMAG, elf_header->e_ident, SELFMAG)) JMP_W_CERROR("File is not an ELF file", ret);
     //check if the elf binary has the correct data architecture class (64-bit / for addresses, offsets, types, ...)
-    if (ELFCLASS64 != elf_header->e_ident[4]) JMP_W_CERROR("Data architecture class is not 64-bit", ret);
+    if (ELFCLASS64 != elf_header->e_ident[EI_CLASS]) JMP_W_CERROR("Data architecture class is not 64-bit", ret);
     // check if the elf file is encoded in little endian
-    if (ELFDATA2LSB != elf_header->e_ident[5]) JMP_W_CERROR("ELF file is not encoded in little-endian", ret);
+    if (ELFDATA2LSB != elf_header->e_ident[EI_DATA]) JMP_W_CERROR("ELF file is not encoded in little-endian", ret);
     // check if the elf file has the correct version
-    if (EI_VERSION != elf_header->e_ident[6] || EV_CURRENT != elf_header->e_version)
+    if (EV_CURRENT != elf_header->e_ident[EI_VERSION] || EV_CURRENT != elf_header->e_version)
         JMP_W_CERROR("ELF File does not have the correct version", ret);
     // for now, we skip checking the EI_OSABI field
 
@@ -82,7 +86,7 @@ int open_and_parse_elf(bin_info_table_T* bin_infos, const char* filename) {
     if (EM_X86_64 != elf_header->e_machine) JMP_W_CERROR("EFI file has the wrong instruction set architecture", ret);
 
     // next get the entrypoint (as a virtual address) of the program for it to start
-    *bin_infos->entrypoint = elf_header->e_entry;  // this maybe zero
+    bin_infos->entrypoint = elf_header->e_entry;  // this maybe zero
 
     // check if the header exits
     if (!elf_header->e_phoff) JMP_W_CERROR("Program header table size if 0", ret);
@@ -108,7 +112,7 @@ int open_and_parse_elf(bin_info_table_T* bin_infos, const char* filename) {
     return 0;  // we assume if we came here everything is good :)
     ret:  // if we jumped here, something went wrong :(
     fclose(elf_file_stream);
-    if (-errno == retval) return retval;  // if the errno code is still the same from the beginning, return it
+    if (errno == retval) return retval;  // if the errno code is still the same from the beginning, return it
     return -errno;  // else we just return the error code
 }
 
@@ -117,19 +121,39 @@ int load_alloc_segments(const bin_info_table_T* bin_infos) {
 
     // iterate over the program header table and load the segments we need --> p_type=PT_LOAD
     for (Elf64_Half i = 0; i<bin_infos->elf_header->e_phnum; i++) {
-        Elf64_Phdr phdr_entry = bin_infos->prog_header_table[i];  // get the next program header entry
+        const Elf64_Phdr phdr_entry = bin_infos->prog_header_table[i];  // get the next program header entry
         if (PT_LOAD != phdr_entry.p_type) continue;
-        DEBUG("Found loadable segment at offset: %d\n", i);
+
+        // comparing the EFI-PF_* flags with the mmap PROT_* flags, one can see that you can simply invert them
+        const Elf64_Word phdrflags = phdr_entry.p_flags;
+        auto const p_vaddr = (void*)phdr_entry.p_vaddr;
+        // TODO: replace fd with efi file descriptor and load the segment directly from the efi file
+        const void* pa = mmap(
+            p_vaddr, phdr_entry.p_memsz,
+            (phdrflags & PF_X ? PROT_EXEC : 0) | (phdrflags & PF_W ? PROT_WRITE : 0) | (phdrflags & PF_R ? PROT_READ : 0),
+            MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+        if (MAP_FAILED == pa) {
+            PRINT_CUSTOM_ERROR("Failed to allocate memory at address %p with size %lu and flags %d", p_vaddr, phdr_entry.p_memsz,
+            (phdrflags & PF_X ? PROT_EXEC : 0) | (phdrflags & PF_W ? PROT_WRITE : 0) | (phdrflags & PF_R ? PROT_READ : 0));
+            PRINT_ERROR("Error from mmap");
+            goto ret;
+        }
+        if (pa != (void*)phdr_entry.p_vaddr) {
+            PRINT_CUSTOM_ERROR("Failed to allocate memory for segment at correct address. \n"
+                               "Provided addr by mmap: %p vs. specified addr by hdr: %p", pa, p_vaddr)
+            goto ret;
+        }
+        break;
     }
-    goto ret;
 
     return 0;
     ret:
-    if (-errno == retval) return retval;  // if the errno code is still the same from the beginning, return it
+    if (errno == retval) return retval;  // if the errno code is still the same from the beginning, return it
     return -errno;  // else we just return the error code
 }
 
 void cleanup(bin_info_table_T* bin_info) {
+    DEBUG("Cleaning up")
     free(bin_info->prog_header_table);
     bin_info->prog_header_table = nullptr;
     free(bin_info->elf_header);
@@ -144,19 +168,13 @@ void cleanup(bin_info_table_T* bin_info) {
  */
 int main(const int argc, char **argv) {
     DEBUG("Entering main");
-    int retval = EXIT_SUCCESS;
     if (argc < 2) THROW_CUSTOM_ERROR("Usage: %s <path/to/ELF/binary>", *argv);
+    int retval = EXIT_SUCCESS;
 
     bin_info_table_T binary_infos = {0};
-    if (0 > open_and_parse_elf(&binary_infos, argv[1])) {
-        PRINT_ERROR("Failed to load ELF header");
-        goto on_error;
-    }
+    if (0 > open_and_parse_elf(&binary_infos, argv[1])) JMP_W_CERROR("Failed to load ELF header", on_error);
 
-    if (0 > load_alloc_segments(&binary_infos)) {
-        PRINT_ERROR("Failed to load segments");
-        goto on_error;
-    }
+    if (0 > load_alloc_segments(&binary_infos)) JMP_W_CERROR("Failed to load segments", on_error);
 
     do_cleanup:
     cleanup(&binary_infos);

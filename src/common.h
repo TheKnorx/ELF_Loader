@@ -30,6 +30,7 @@
 #define PRINT_CUSTOM_ERROR(FORMAT_STR, ...) do { \
     PRESERVER_ERRNO  \
     printf(FORMAT_STR, ##__VA_ARGS__);  \
+    putchar('\n');  \
     RESTORE_ERRNO  \
 } while (0);
 
