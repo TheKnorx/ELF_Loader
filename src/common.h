@@ -5,7 +5,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 
-#define PRESERVER_ERRONO int _errno_saved = errno;
+#define PRESERVER_ERRNO int _errno_saved = errno;
 #define RESTORE_ERRNO errno = _errno_saved;
 
 // As a variadic argument we except format specifier for printf
@@ -22,7 +22,7 @@
 
 // As a variadic argument we except format specifier for printf
 #define PRINT_CUSTOM_ERROR(FORMAT_STR, ...) do { \
-    PRESERVER_ERRONO  \
+    PRESERVER_ERRNO  \
     printf(FORMAT_STR, ##__VA_ARGS__);  \
     RESTORE_ERRNO  \
 } while (0);
