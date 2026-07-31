@@ -1,3 +1,5 @@
+// ToDo: Replace all fread-error prints with proper error handling (feof and ferror)
+
 // Includes
 #define _FILE_OFFSET_BITS 64
 #include <assert.h>
@@ -19,6 +21,7 @@
 
 typedef struct bin_info_table_S {
     Elf64_Addr  entrypoint;  // this maybe zero
+    FILE* elf_fd;
     Elf64_Ehdr* elf_header;
     Elf64_Phdr* prog_header_table;
     int allocd_segs_size;
@@ -111,14 +114,14 @@ int open_and_parse_elf(bin_info_table_T* bin_infos, const char* filename) {
 
     return 0;  // we assume if we came here everything is good :)
     ret:  // if we jumped here, something went wrong :(
-    fclose(elf_file_stream);
+    // fclose(elf_file_stream);
     if (errno == retval) return retval;  // if the errno code is still the same from the beginning, return it
     return errno;  // else we return the error code
 }
 
 int load_alloc_segments(bin_info_table_T* bin_infos) {
     int retval = -EIO;  // we just make an I/O-Error the default here
-    void*** allocd_segs = &bin_infos->allocd_segs;
+    void*** allocd_segs = &bin_infos->allocd_segs;  // pointer to address of array allocd_segs
 
     // iterate over the program header table and load the segments we need --> p_type=PT_LOAD
     for (Elf64_Half i = 0; i<bin_infos->elf_header->e_phnum; i++) {
@@ -130,9 +133,11 @@ int load_alloc_segments(bin_info_table_T* bin_infos) {
         void** original_ptr = bin_infos->allocd_segs;
         void* new_ptr = realloc(*allocd_segs, sizeof(void*));
         if (original_ptr == new_ptr || NULL == new_ptr) JMP_W_CERROR("Realloc failed", ret);
-        *allocd_segs = new_ptr;
+        *allocd_segs = new_ptr;  // assign the new space to the array
+        // Pointer pointing to the address of teh current array index --> for shorter/better usage:
+        void** curr_seg_addr_ptr = *allocd_segs+bin_infos->allocd_segs_size-1;
 
-        // comparing the EFI-PF_* flags with the mmap PROT_* flags, one can see that you can simply invert them
+        // next allocate the actual segment with the correct addess
         const Elf64_Word phdrflags = phdr_entry.p_flags;
         auto const p_vaddr = (void*)phdr_entry.p_vaddr;
         // TODO: replace fd with efi file descriptor and load the segment directly from the efi file
@@ -140,7 +145,7 @@ int load_alloc_segments(bin_info_table_T* bin_infos) {
             p_vaddr, phdr_entry.p_memsz,
             (phdrflags & PF_X ? PROT_EXEC : 0) | (phdrflags & PF_W ? PROT_WRITE : 0) | (phdrflags & PF_R ? PROT_READ : 0),
             MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
-        *(*allocd_segs+bin_infos->allocd_segs_size-1) = pa;
+        *curr_seg_addr_ptr = pa;
         if (MAP_FAILED == pa) {
             PRINT_CUSTOM_ERROR("Failed to allocate memory at address %p with size %lu and flags %d", p_vaddr, phdr_entry.p_memsz,
             (phdrflags & PF_X ? PROT_EXEC : 0) | (phdrflags & PF_W ? PROT_WRITE : 0) | (phdrflags & PF_R ? PROT_READ : 0));
@@ -152,12 +157,24 @@ int load_alloc_segments(bin_info_table_T* bin_infos) {
                                "Provided addr by mmap: %p vs. specified addr by hdr: %p", pa, p_vaddr)
             goto ret;
         }
+
+        // read in the segment data from the elf file and write it into the allocated memory of the segment
+        // also here, we ignore the fact that p_offset could be too large for fseek
+        fseek(bin_infos->elf_fd, phdr_entry.p_offset, SEEK_SET);
+        if (phdr_entry.p_filesz != fread(*curr_seg_addr_ptr, 1, phdr_entry.p_filesz, bin_infos->elf_fd))
+            JMP_W_CERROR("Failed to read segment", ret);
+        // memset doesn't return an error, so we assume that this is always successful - idk :)
+        memset(*curr_seg_addr_ptr, 0x00, phdr_entry.p_memsz - phdr_entry.p_filesz);
     }
 
     return 0;
     ret:
     if (errno == retval) return retval;  // if the errno code is still the same from the beginning, return it
     return errno;  // else we return the error code
+}
+
+int transfer_control() {
+
 }
 
 void cleanup(bin_info_table_T* bin_info) {
