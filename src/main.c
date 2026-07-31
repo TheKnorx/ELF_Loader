@@ -11,6 +11,7 @@
 #include <sys/mman.h>
 
 #include "common.h"
+extern void transfer_control(void *entry_point);
 
 // Macros
 #define ELF_HEADER_SIZE (sizeof(Elf64_Ehdr))
@@ -116,10 +117,9 @@ int open_and_parse_elf(bin_info_table_T* bin_infos, const char* filename) {
         JMP_W_CERROR("Failed to read the program header table", ret);
 
     return 0;  // we assume if we came here everything is good :)
-    ret:  // if we jumped here, something went wrong :(
-    // fclose(elf_file_stream);
-    if (errno == retval) return retval;  // if the errno code is still the same from the beginning, return it
-    return errno;  // else we return the error code
+    ret:
+    if (errno != retval) return errno;  // return errno if it's not the same as retval
+    return retval;  // else we return the retval code
 }
 
 int load_alloc_segments(bin_info_table_T* bin_infos) {
@@ -133,36 +133,51 @@ int load_alloc_segments(bin_info_table_T* bin_infos) {
 
         // if we found a loadable segment, allocate memory for the pointer to store it into the array
         bin_infos->allocd_segs_size++;  // increase the size of the
-        void** original_ptr = bin_infos->allocd_segs;
-        void* new_ptr = realloc(*allocd_segs, sizeof(void*));
-        if (original_ptr == new_ptr || NULL == new_ptr) JMP_W_ERROR("Realloc failed", ret);
+        void* new_ptr = realloc(*allocd_segs, sizeof(void*)*bin_infos->allocd_segs_size);
+        if (NULL == new_ptr) JMP_W_CERROR("Realloc failed", ret);
         *allocd_segs = new_ptr;  // assign the new space to the array
 
         // next allocate the actual segment with the correct address
         const Elf64_Word phdrflags = phdr_entry.p_flags;
-        auto const p_vaddr = (void*)phdr_entry.p_vaddr;
 
         // TODO: replace fd with efi file descriptor and load the segment directly from the efi file
+
+        /* TODO: Calculate the correct page start and map from the offset
+         * page_start = vaddr - (vaddr - align)
+         * so now page_start % align = 0
+         *
+         * Calculate the size of the mapping:
+         * page_offset = p_vaddr - page_start
+         * mapping_size = page_offset + p_memsz
+         *
+         * Write data into page mapping at:
+         * page_start + page_offset
+         */
+
+        Elf64_Addr page_start = phdr_entry.p_vaddr - phdr_entry.p_vaddr % phdr_entry.p_align;
+        Elf64_Addr page_offset = phdr_entry.p_vaddr - page_start;
+        Elf64_Addr mapping_size = page_offset + phdr_entry.p_memsz;
         // always set the protection of the mapping to write, cause we still have to write the segment data
-        void* const pa = mmap(p_vaddr, phdr_entry.p_memsz, PROT_WRITE,  MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
-        *(*allocd_segs+bin_infos->allocd_segs_size-1) = pa;  // store pointer for later usage...
+        void* const pa = mmap((void*)page_start, mapping_size, PROT_WRITE,
+            MAP_PRIVATE | MAP_ANONYMOUS | MAP_FIXED, -1, 0);
         if (MAP_FAILED == pa) {
-            PRINT_CUSTOM_ERROR("Failed to allocate memory at address %p with size %lu", p_vaddr, phdr_entry.p_memsz);
+            PRINT_CUSTOM_ERROR("Failed to allocate memory at address %p with size %lu", (void*)page_start, mapping_size);
             PRINT_ERROR("Error from mmap");
             goto ret;
         }
-        if (pa != (void*)phdr_entry.p_vaddr)
+        *(*allocd_segs+bin_infos->allocd_segs_size-1) = pa;  // store pointer for later usage...
+        if (pa != (void*)page_start)
             JMP_W_CERROR("Failed to allocate memory for segment at correct address. \n"
-                         "Provided addr by mmap: %p vs. specified addr by hdr: %p", ret, pa, p_vaddr)
+                         "Provided addr by mmap: %p vs. calculated addr from hdr: %p", ret, pa, (void*)page_start)
 
-        DEBUG("Successfully memory at address %p with size %lu", p_vaddr, phdr_entry.p_memsz);
+        DEBUG("Successfully created memory mapping at address %p with size %lu", (void*)page_start, mapping_size);
         fflush(stdout);
 
         // read in the segment data from the elf file and write it into the allocated memory of the segment
         // also here, we ignore the fact that p_offset could be too large for fseek
         if (0 > fseeko(bin_infos->elf_fstream, phdr_entry.p_offset, SEEK_SET))
             JMP_W_ERROR("Failed to seek in file - possibly because its too large for fseeko to handle", ret);
-        if (phdr_entry.p_filesz != fread(pa, 1, phdr_entry.p_filesz, bin_infos->elf_fstream))
+        if (phdr_entry.p_filesz != fread((void*)(page_start+page_offset), 1, phdr_entry.p_filesz, bin_infos->elf_fstream))
             JMP_W_CERROR("Failed to read segment from file", ret);
         // memset doesn't return an error, so we assume that this is always successful - idk :)
         memset(pa, 0x00, phdr_entry.p_memsz - phdr_entry.p_filesz);
@@ -174,24 +189,24 @@ int load_alloc_segments(bin_info_table_T* bin_infos) {
 
     return 0;
     ret:
-    if (errno == retval) return retval;  // if the errno code is still the same from the beginning, return it
-    return errno;  // else we return the error code
+    if (errno != retval) return errno;  // return errno if it's not the same as retval
+    return retval;  // else we return the retval code
 }
 
-int transfer_control(bin_info_table_T* bin_info) {
-#define ASM_INSTRUCTION(INSTRUCTION) INSTRUCTION "\n\t"
-    __asm("");  // enable intel syntax
-    __asm volatile(
-        ASM_INSTRUCTION(".intel_syntax noprefix")
-        ASM_INSTRUCTION("jmp rax")
-        :                       // output
-        : "a" (bin_info->entrypoint)  // input
-        : "ecx", "edx", "ebx"   // clobbered register
-     );
-    __asm(".att_syntax prefix");
-    return 0;
-#undef ASM_INSTRUCTION  // this macro will only exist within this function - why? 'cause I want it to be
-}
+// int transfer_control(bin_info_table_T* bin_info) {
+// #define ASM_INSTRUCTION(INSTRUCTION) INSTRUCTION "\n\t"
+//     __asm("");  // enable intel syntax
+//     __asm volatile(
+//         ASM_INSTRUCTION(".intel_syntax noprefix")
+//         ASM_INSTRUCTION("jmp rax")
+//         ASM_INSTRUCTION(".att_syntax prefix")
+//         :                       // output
+//         : "a" (bin_info->entrypoint)  // input
+//         : "ecx", "edx", "ebx"   // clobbered register
+//      );
+//     return 0;
+// #undef ASM_INSTRUCTION  // this macro will only exist within this function - why? 'cause I want it to be
+// }
 
 void cleanup(bin_info_table_T* bin_info) {
     DEBUG("Cleaning up")
@@ -233,7 +248,8 @@ int main(const int argc, char **argv) {
 
     if (0 > load_alloc_segments(&binary_infos)) JMP_W_CERROR("Failed to load segments", on_error);
 
-    transfer_control(&binary_infos);
+    fflush(nullptr);
+    transfer_control((void*)binary_infos.entrypoint);
 
     do_cleanup:
     cleanup(&binary_infos);
