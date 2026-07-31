@@ -18,6 +18,8 @@
 #define GET_PHDR_ENTRY(_e_phoff, _e_phentsize) (_e_phoff + i * _e_phentsize)
 // I know this macro is bad coding style, but it also helps massively in reducing duplicate code, so I take it
 #define JMP_W_CERROR(ERROR_STR, JMP_LABEL, ...) { PRINT_CUSTOM_ERROR(ERROR_STR __VA_OPT__(,) __VA_ARGS__); goto JMP_LABEL; }
+#define JMP_W_ERROR(ERROR_STR, JMP_LABEL) { PRINT_ERROR(ERROR_STR); goto JMP_LABEL; }
+
 
 typedef struct bin_info_table_S {
     Elf64_Addr  entrypoint;  // this maybe zero
@@ -58,7 +60,7 @@ int open_and_parse_elf(bin_info_table_T* bin_infos, const char* filename) {
 
     // create a stdio file obj to the elf binary
     FILE* elf_file_stream = fopen(filename, "r");
-    if (NULL == elf_file_stream) THROW_ERROR("Failed to open the ELF binary");
+    if (NULL == elf_file_stream) JMP_W_ERROR("Failed to open the ELF binary", ret);
     bin_infos->elf_fstream = elf_file_stream;
     fseek(elf_file_stream, 0L, SEEK_END);
     const Elf64_Off file_size = ftell(elf_file_stream);  // implicitly cast this to an Elf64_Off type
@@ -104,10 +106,10 @@ int open_and_parse_elf(bin_info_table_T* bin_infos, const char* filename) {
     /* for now, we just ignore the fact that if the file size is greater than a long,
      * and simply 'throw' a raw error when the seek fails */
     if (0 > fseeko(elf_file_stream, elf_header->e_phoff, SEEK_SET))
-        THROW_ERROR("Failed to seek in file - possibly because its too large for fseeko to handle");
+        JMP_W_ERROR("Failed to seek in file - possibly because its too large for fseeko to handle", ret);
     const Elf64_Word phdrtsize = elf_header->e_phentsize * elf_header->e_phnum;
     Elf64_Phdr* phdrtable = calloc(1, phdrtsize);  // program header table
-    if (NULL == phdrtable) JMP_W_CERROR("Failed to allocate space for the pogram-header-buffer", ret);
+    if (NULL == phdrtable) JMP_W_ERROR("Failed to allocate space for the pogram-header-buffer", ret);
 
     bin_infos->prog_header_table = phdrtable;
     if (phdrtsize != fread(phdrtable, 1, phdrtsize, elf_file_stream))
@@ -133,7 +135,7 @@ int load_alloc_segments(bin_info_table_T* bin_infos) {
         bin_infos->allocd_segs_size++;  // increase the size of the
         void** original_ptr = bin_infos->allocd_segs;
         void* new_ptr = realloc(*allocd_segs, sizeof(void*));
-        if (original_ptr == new_ptr || NULL == new_ptr) JMP_W_CERROR("Realloc failed", ret);
+        if (original_ptr == new_ptr || NULL == new_ptr) JMP_W_ERROR("Realloc failed", ret);
         *allocd_segs = new_ptr;  // assign the new space to the array
 
         // next allocate the actual segment with the correct address
@@ -159,7 +161,7 @@ int load_alloc_segments(bin_info_table_T* bin_infos) {
         // read in the segment data from the elf file and write it into the allocated memory of the segment
         // also here, we ignore the fact that p_offset could be too large for fseek
         if (0 > fseeko(bin_infos->elf_fstream, phdr_entry.p_offset, SEEK_SET))
-            THROW_ERROR("Failed to seek in file - possibly because its too large for fseeko to handle");
+            JMP_W_ERROR("Failed to seek in file - possibly because its too large for fseeko to handle", ret);
         if (phdr_entry.p_filesz != fread(pa, 1, phdr_entry.p_filesz, bin_infos->elf_fstream))
             JMP_W_CERROR("Failed to read segment from file", ret);
         // memset doesn't return an error, so we assume that this is always successful - idk :)
@@ -167,10 +169,7 @@ int load_alloc_segments(bin_info_table_T* bin_infos) {
 
         // next set the actual (correct) flags for this memory mapping
         const int mmap_seg_prot = (phdrflags & PF_X ? PROT_EXEC : 0) | (phdrflags & PF_W ? PROT_WRITE : 0) | (phdrflags & PF_R ? PROT_READ : 0);
-        if (-1 == mprotect(pa, phdr_entry.p_memsz, mmap_seg_prot)) {
-            PRINT_ERROR("memprotect failed");
-            goto ret;
-        }
+        if (-1 == mprotect(pa, phdr_entry.p_memsz, mmap_seg_prot)) JMP_W_ERROR("memprotect failed", ret);
     }
 
     return 0;
@@ -216,7 +215,10 @@ void cleanup(bin_info_table_T* bin_info) {
  */
 int main(const int argc, char **argv) {
     DEBUG("Entering main");
-    if (argc < 2) THROW_CUSTOM_ERROR("Usage: %s <path/to/ELF/binary>", *argv);
+    if (argc < 2) {
+        printf("Usage: %s <path/to/ELF/binary>", *argv);
+        return 0;
+    }
     int retval = EXIT_SUCCESS;
 
     bin_info_table_T binary_infos = {
