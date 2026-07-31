@@ -181,8 +181,19 @@ int load_alloc_segments(bin_info_table_T* bin_infos) {
     return errno;  // else we return the error code
 }
 
-int transfer_control() {
-
+int transfer_control(bin_info_table_T* bin_info) {
+#define ASM_INSTRUCTION(INSTRUCTION) INSTRUCTION "\n\t"
+    __asm("");  // enable intel syntax
+    __asm volatile(
+        ASM_INSTRUCTION(".intel_syntax noprefix")
+        ASM_INSTRUCTION("jmp rax")
+        :                       // output
+        : "a" (bin_info->entrypoint)  // input
+        : "ecx", "edx", "ebx"   // clobbered register
+     );
+    __asm(".att_syntax prefix");
+    return 0;
+#undef ASM_INSTRUCTION  // this macro will only exist within this function - why? 'cause I want it to be
 }
 
 void cleanup(bin_info_table_T* bin_info) {
@@ -221,6 +232,8 @@ int main(const int argc, char **argv) {
     if (0 > open_and_parse_elf(&binary_infos, argv[1])) JMP_W_CERROR("Failed to load ELF header", on_error);
 
     if (0 > load_alloc_segments(&binary_infos)) JMP_W_CERROR("Failed to load segments", on_error);
+
+    transfer_control(&binary_infos);
 
     do_cleanup:
     cleanup(&binary_infos);
