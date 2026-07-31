@@ -17,12 +17,12 @@
 // I know this macro is bad coding style, but it also helps massively in reducing duplicate code, so I take it
 #define JMP_W_CERROR(ERROR_STR, JMP_LABEL) {PRINT_CUSTOM_ERROR(ERROR_STR); goto JMP_LABEL;}
 
-#define MAP_PHDR_FLAGS(PHDR_FLAGS) ()
-
 typedef struct bin_info_table_S {
     Elf64_Addr  entrypoint;  // this maybe zero
     Elf64_Ehdr* elf_header;
     Elf64_Phdr* prog_header_table;
+    int allocd_segs_size;
+    void** allocd_segs;  // array of pointer to allocated segments
 } bin_info_table_T;
 
 /**
@@ -113,25 +113,34 @@ int open_and_parse_elf(bin_info_table_T* bin_infos, const char* filename) {
     ret:  // if we jumped here, something went wrong :(
     fclose(elf_file_stream);
     if (errno == retval) return retval;  // if the errno code is still the same from the beginning, return it
-    return -errno;  // else we just return the error code
+    return errno;  // else we return the error code
 }
 
-int load_alloc_segments(const bin_info_table_T* bin_infos) {
+int load_alloc_segments(bin_info_table_T* bin_infos) {
     int retval = -EIO;  // we just make an I/O-Error the default here
+    void*** allocd_segs = &bin_infos->allocd_segs;
 
     // iterate over the program header table and load the segments we need --> p_type=PT_LOAD
     for (Elf64_Half i = 0; i<bin_infos->elf_header->e_phnum; i++) {
         const Elf64_Phdr phdr_entry = bin_infos->prog_header_table[i];  // get the next program header entry
         if (PT_LOAD != phdr_entry.p_type) continue;
 
+        // if we found a loadable segment, allocate memory for the pointer to store it into the array
+        bin_infos->allocd_segs_size++;  // increase the size of the
+        void** original_ptr = bin_infos->allocd_segs;
+        void* new_ptr = realloc(*allocd_segs, sizeof(void*));
+        if (original_ptr == new_ptr || NULL == new_ptr) JMP_W_CERROR("Realloc failed", ret);
+        *allocd_segs = new_ptr;
+
         // comparing the EFI-PF_* flags with the mmap PROT_* flags, one can see that you can simply invert them
         const Elf64_Word phdrflags = phdr_entry.p_flags;
         auto const p_vaddr = (void*)phdr_entry.p_vaddr;
         // TODO: replace fd with efi file descriptor and load the segment directly from the efi file
-        const void* pa = mmap(
+        void* const pa = mmap(
             p_vaddr, phdr_entry.p_memsz,
             (phdrflags & PF_X ? PROT_EXEC : 0) | (phdrflags & PF_W ? PROT_WRITE : 0) | (phdrflags & PF_R ? PROT_READ : 0),
             MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+        *(*allocd_segs+bin_infos->allocd_segs_size-1) = pa;
         if (MAP_FAILED == pa) {
             PRINT_CUSTOM_ERROR("Failed to allocate memory at address %p with size %lu and flags %d", p_vaddr, phdr_entry.p_memsz,
             (phdrflags & PF_X ? PROT_EXEC : 0) | (phdrflags & PF_W ? PROT_WRITE : 0) | (phdrflags & PF_R ? PROT_READ : 0));
@@ -143,13 +152,12 @@ int load_alloc_segments(const bin_info_table_T* bin_infos) {
                                "Provided addr by mmap: %p vs. specified addr by hdr: %p", pa, p_vaddr)
             goto ret;
         }
-        break;
     }
 
     return 0;
     ret:
     if (errno == retval) return retval;  // if the errno code is still the same from the beginning, return it
-    return -errno;  // else we just return the error code
+    return errno;  // else we return the error code
 }
 
 void cleanup(bin_info_table_T* bin_info) {
@@ -158,6 +166,12 @@ void cleanup(bin_info_table_T* bin_info) {
     bin_info->prog_header_table = nullptr;
     free(bin_info->elf_header);
     bin_info->elf_header = nullptr;
+    if (nullptr == bin_info->allocd_segs) goto allocd_segs_free_end;
+    for (int i = 0; i<bin_info->allocd_segs_size; i++) {
+        if (MAP_FAILED != bin_info->allocd_segs[i]) munmap(bin_info->allocd_segs[i], sizeof(void*));
+    }
+    free(bin_info->allocd_segs);
+    allocd_segs_free_end:
 }
 
 /**
@@ -171,7 +185,14 @@ int main(const int argc, char **argv) {
     if (argc < 2) THROW_CUSTOM_ERROR("Usage: %s <path/to/ELF/binary>", *argv);
     int retval = EXIT_SUCCESS;
 
-    bin_info_table_T binary_infos = {0};
+    bin_info_table_T binary_infos = {
+        .entrypoint = 0x000000000000,  // empty 64-bit address
+        .elf_header = nullptr,
+        .prog_header_table = nullptr,
+        .allocd_segs_size = 0,
+        .allocd_segs = nullptr,
+    };
+
     if (0 > open_and_parse_elf(&binary_infos, argv[1])) JMP_W_CERROR("Failed to load ELF header", on_error);
 
     if (0 > load_alloc_segments(&binary_infos)) JMP_W_CERROR("Failed to load segments", on_error);
