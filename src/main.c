@@ -142,7 +142,7 @@ int load_alloc_segments(bin_info_table_T* bin_infos) {
 
         // TODO: replace fd with efi file descriptor and load the segment directly from the efi file
 
-        /* TODO: Calculate the correct page start and map from the offset
+        /* TODO FINISHED: Calculate the correct page start and map from the offset
          * page_start = vaddr - (vaddr - align)
          * so now page_start % align = 0
          *
@@ -192,21 +192,6 @@ int load_alloc_segments(bin_info_table_T* bin_infos) {
     if (errno != retval) return errno;  // return errno if it's not the same as retval
     return retval;  // else we return the retval code
 }
-
-// int transfer_control(bin_info_table_T* bin_info) {
-// #define ASM_INSTRUCTION(INSTRUCTION) INSTRUCTION "\n\t"
-//     __asm("");  // enable intel syntax
-//     __asm volatile(
-//         ASM_INSTRUCTION(".intel_syntax noprefix")
-//         ASM_INSTRUCTION("jmp rax")
-//         ASM_INSTRUCTION(".att_syntax prefix")
-//         :                       // output
-//         : "a" (bin_info->entrypoint)  // input
-//         : "ecx", "edx", "ebx"   // clobbered register
-//      );
-//     return 0;
-// #undef ASM_INSTRUCTION  // this macro will only exist within this function - why? 'cause I want it to be
-// }
 
 void cleanup(bin_info_table_T* bin_info) {
     DEBUG("Cleaning up")
