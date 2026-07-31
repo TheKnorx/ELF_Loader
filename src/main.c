@@ -17,7 +17,7 @@
 #define NOP __asm__("NOP")  // No-Operation - assembly instruction
 #define GET_PHDR_ENTRY(_e_phoff, _e_phentsize) (_e_phoff + i * _e_phentsize)
 // I know this macro is bad coding style, but it also helps massively in reducing duplicate code, so I take it
-#define JMP_W_CERROR(ERROR_STR, JMP_LABEL) {PRINT_CUSTOM_ERROR(ERROR_STR); goto JMP_LABEL;}
+#define JMP_W_CERROR(ERROR_STR, JMP_LABEL, ...) { PRINT_CUSTOM_ERROR(ERROR_STR __VA_OPT__(,) __VA_ARGS__); goto JMP_LABEL; }
 
 typedef struct bin_info_table_S {
     Elf64_Addr  entrypoint;  // this maybe zero
@@ -149,11 +149,9 @@ int load_alloc_segments(bin_info_table_T* bin_infos) {
             PRINT_ERROR("Error from mmap");
             goto ret;
         }
-        if (pa != (void*)phdr_entry.p_vaddr) {
-            PRINT_CUSTOM_ERROR("Failed to allocate memory for segment at correct address. \n"
-                               "Provided addr by mmap: %p vs. specified addr by hdr: %p", pa, p_vaddr)
-            goto ret;
-        }
+        if (pa != (void*)phdr_entry.p_vaddr)
+            JMP_W_CERROR("Failed to allocate memory for segment at correct address. \n"
+                         "Provided addr by mmap: %p vs. specified addr by hdr: %p", ret, pa, p_vaddr)
 
         DEBUG("Successfully memory at address %p with size %lu", p_vaddr, phdr_entry.p_memsz);
         fflush(stdout);
