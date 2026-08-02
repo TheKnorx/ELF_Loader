@@ -1,5 +1,5 @@
 ; nasm -f elf64 Test-ELF-Program.asm
-; gcc -no-pie Test-ELF-Program.o -o Test-ELF-Program
+; gcc -static -no-pie Test-ELF-Program.o -o Test-ELF-Program
 
 section .bss
 section .data
@@ -10,11 +10,11 @@ extern printf
 
 global main
 
-main: 
+main:
     xor     rax, rax
     mov     rdi, MSG
     call    printf
-exit: 
+exit:
     ret
 
 

@@ -11,13 +11,16 @@
 #include <sys/mman.h>
 
 #include "common.h"
-extern void transfer_control(void *entry_point);
+// assembly functions
+extern void transfer_control(void* entry_point);
+ssize_t memcpy_n(void* dest, const void* src);
 
 // Macros
 #define ELF_HEADER_SIZE (sizeof(Elf64_Ehdr))
 #define NOP __asm__("NOP")  // No-Operation - assembly instruction
 #define GET_PHDR_ENTRY(_e_phoff, _e_phentsize) (_e_phoff + i * _e_phentsize)
-// I know this macro is bad coding style, but it also helps massively in reducing duplicate code, so I take it
+
+// I know those macro are of bad coding style, but it also helps massively in reducing duplicate code, so I take it
 #define JMP_W_CERROR(ERROR_STR, JMP_LABEL, ...) { PRINT_CUSTOM_ERROR(ERROR_STR __VA_OPT__(,) __VA_ARGS__); goto JMP_LABEL; }
 #define JMP_W_ERROR(ERROR_STR, JMP_LABEL) { PRINT_ERROR(ERROR_STR); goto JMP_LABEL; }
 
@@ -27,7 +30,9 @@ typedef struct bin_info_table_S {
     FILE* elf_fstream;
     Elf64_Ehdr* elf_header;
     Elf64_Phdr* prog_header_table;
-    int allocd_segs_size;
+    int allocd_segs_size;  // len of allocd_segs array
+    Elf64_Addr* allocd_segs_sizes;  // len of each allocd_segs mapping
+    void* initial_user_stack;
     void** allocd_segs;  // array of pointer to allocated segments
 } bin_info_table_T;
 
@@ -122,20 +127,29 @@ int open_and_parse_elf(bin_info_table_T* bin_infos, const char* filename) {
     return retval;  // else we return the retval code
 }
 
-int load_alloc_segments(bin_info_table_T* bin_infos) {
+int load_alloc_segments(bin_info_table_T* bin_infos, int argc, char** argv) {
     int retval = -EIO;  // we just make an I/O-Error the default here
     void*** allocd_segs = &bin_infos->allocd_segs;  // pointer to address of array allocd_segs
+    Elf64_Addr** allocd_segs_sizes = &bin_infos->allocd_segs_sizes;  // pointer to address of array allocd_segs_size
+    Elf64_Xword page_size = 0;      // page size specified in the elf program headers - for later usage
+    Elf64_Addr mapping_size = 0;    // define the variable that will hold the mapping size here for later usage
 
     // iterate over the program header table and load the segments we need --> p_type=PT_LOAD
     for (Elf64_Half i = 0; i<bin_infos->elf_header->e_phnum; i++) {
-        const Elf64_Phdr phdr_entry = bin_infos->prog_header_table[i];  // get the next program header entry
+        Elf64_Phdr phdr_entry = bin_infos->prog_header_table[i];  // get the next program header entry
         if (PT_LOAD != phdr_entry.p_type) continue;
+        if (!page_size) page_size = phdr_entry.p_align;
 
         // if we found a loadable segment, allocate memory for the pointer to store it into the array
-        bin_infos->allocd_segs_size++;  // increase the size of the
+        bin_infos->allocd_segs_size++;  // increase the length index
+        // (re)alloc the segment-mapping-address array
         void* new_ptr = realloc(*allocd_segs, sizeof(void*)*bin_infos->allocd_segs_size);
-        if (NULL == new_ptr) JMP_W_CERROR("Realloc failed", ret);
+        if (NULL == new_ptr) JMP_W_CERROR("Realloc failed on segment-mapping-address array", ret);
         *allocd_segs = new_ptr;  // assign the new space to the array
+        // also (re)alloc the segment-mapping-sizes array
+        new_ptr = realloc(*allocd_segs_sizes, sizeof(void*)*bin_infos->allocd_segs_size);
+        if (NULL == new_ptr) JMP_W_CERROR("Realloc failed segment-mapping-sizes array", ret);
+        *allocd_segs_sizes = new_ptr;  // assign the new space to the array
 
         // next allocate the actual segment with the correct address
         const Elf64_Word phdrflags = phdr_entry.p_flags;
@@ -156,7 +170,8 @@ int load_alloc_segments(bin_info_table_T* bin_infos) {
 
         Elf64_Addr page_start = phdr_entry.p_vaddr - phdr_entry.p_vaddr % phdr_entry.p_align;
         Elf64_Addr page_offset = phdr_entry.p_vaddr - page_start;
-        Elf64_Addr mapping_size = page_offset + phdr_entry.p_memsz;
+        mapping_size = page_offset + phdr_entry.p_memsz;
+        bin_infos->allocd_segs_sizes[i] = mapping_size;
         // always set the protection of the mapping to write, cause we still have to write the segment data
         void* const pa = mmap((void*)page_start, mapping_size, PROT_WRITE,
             MAP_PRIVATE | MAP_ANONYMOUS | MAP_FIXED, -1, 0);
@@ -187,6 +202,61 @@ int load_alloc_segments(bin_info_table_T* bin_infos) {
         if (-1 == mprotect(pa, phdr_entry.p_memsz, mmap_seg_prot)) JMP_W_ERROR("memprotect failed", ret);
     }
 
+    /* finally create a new memory mapping for argc, argv, etc.
+     * For that we calculate the beginning of the next page starting from the last memory mapping
+     * By doing that here, we have some code duplication but this is inevitable
+     * We assume that the program header entry variable (phdr_entry) is already initialized
+     * We also assume that the address of the last mapped section is already page aligned (- it has to be)
+     */
+    Elf64_Addr new_page_start = (Elf64_Addr) bin_infos->allocd_segs[bin_infos->allocd_segs_size-1];
+    new_page_start = new_page_start + mapping_size;  // add to the previous addr the mapping size
+    new_page_start = new_page_start + (page_size - new_page_start % page_size);  // make it page aligned
+
+    size_t argv_size = sizeof(char*) * argc;  // begin by adding the space needed for the pointers
+    for (int i = 0; i<argc; i++) argv_size += strlen(argv[i]);  // calculate and add the size of each string
+
+    const size_t new_mapping_size = sizeof(int) + argv_size + sizeof(unsigned char);  // sizeof (argc, argv, NULL)
+    void* const pa = mmap((void*)new_page_start, new_mapping_size, PROT_WRITE | PROT_READ,
+            MAP_PRIVATE | MAP_ANONYMOUS | MAP_FIXED, -1, 0);
+    if (MAP_FAILED == pa) {
+        PRINT_CUSTOM_ERROR("Failed to allocate memory at address %p with size %lu", (void*)new_page_start, new_mapping_size);
+        PRINT_ERROR("Error from mmap");
+        goto ret;
+    }
+    if (pa != (void*)new_page_start) {
+        JMP_W_CERROR("Failed to allocate memory for segment at correct address. \n"
+                         "Provided addr by mmap: %p vs. calculated addr from hdr: %p", ret, pa, (void*)new_page_start)
+    }
+
+    // Create the initial user stack in the new memory mapping manually
+    /* Layout:
+        argc
+        argv[0]
+        ...
+        argv[argc-1]
+        NULL              --> argv terminator
+        NULL              --> envp terminator
+        auxv...           -->
+     */
+    *(int*)pa = argc;  // First append argc to the stack
+    *(int*)pa = 0;  // Add some padding between argc and argv so its 8 bytes instead of 4 bytes
+
+    // Next build the argv string table
+    int omitted_elements = 3;  // namely the NULL after argv, envp and auxv
+    Elf64_Addr _sp = (Elf64_Addr)pa+sizeof(int);  // define kind of a stack pointer
+    for (int i = 0; i<argc; i++) {
+        // Todo: This string address calculation is completely wrong - have to take into account `i` and the string length
+        const Elf64_Addr string_address = _sp+(argc-i+omitted_elements)*sizeof(char*);
+        ssize_t string_length = memcpy_n((char*)string_address, argv[i]);  // copy the string from argv[i] to the stack
+        *(char**)_sp = (char*)string_address;  // 'push' the addr to the copied string onto stack
+        _sp += sizeof(char*);
+    }
+    *((char**)_sp+0) = nullptr;  // 'push' null terminator onto stack to terminate argv
+    *((char**)_sp+1) = nullptr;  // 'push' null terminator onto stack to have an empty envp
+    *((char**)_sp+2) = AT_NULL;  // 'push' AT_NULL onto stack for empty auxv pair
+    *((char**)_sp+2) = nullptr;  // 'push' null onto stack for empty auxv pairs
+    bin_infos->initial_user_stack = pa;  // append it to the binary information block for later reference/cleanup
+
     return 0;
     ret:
     if (errno != retval) return errno;  // return errno if it's not the same as retval
@@ -201,10 +271,12 @@ void cleanup(bin_info_table_T* bin_info) {
     bin_info->elf_header = nullptr;
     if (nullptr == bin_info->allocd_segs) goto allocd_segs_free_end;
     for (int i = 0; i<bin_info->allocd_segs_size; i++) {
-        if (MAP_FAILED != bin_info->allocd_segs[i]) munmap(bin_info->allocd_segs[i], sizeof(void*));
+        if (MAP_FAILED != bin_info->allocd_segs[i]) munmap(bin_info->allocd_segs[i], bin_info->allocd_segs_sizes[i]);
     }
     free(bin_info->allocd_segs);
     allocd_segs_free_end:
+    free(bin_info->allocd_segs_sizes);
+    if (MAP_FAILED != bin_info->initial_user_stack) munmap(bin_info->initial_user_stack, sizeof(void*));
 }
 
 /**
@@ -227,11 +299,13 @@ int main(const int argc, char **argv) {
         .prog_header_table = nullptr,
         .allocd_segs_size = 0,
         .allocd_segs = nullptr,
+        .elf_fstream = nullptr,
+        .initial_user_stack = nullptr,
     };
 
     if (0 > open_and_parse_elf(&binary_infos, argv[1])) JMP_W_CERROR("Failed to load ELF header", on_error);
 
-    if (0 > load_alloc_segments(&binary_infos)) JMP_W_CERROR("Failed to load segments", on_error);
+    if (0 > load_alloc_segments(&binary_infos, argc-1, argv)) JMP_W_CERROR("Failed to load segments", on_error);
 
     fflush(nullptr);
     transfer_control((void*)binary_infos.entrypoint);
