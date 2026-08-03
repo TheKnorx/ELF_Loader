@@ -137,7 +137,7 @@ int load_alloc_segments(bin_info_table_T* bin_infos, int argc, char** argv) {
     // iterate over the program header table and load the segments we need --> p_type=PT_LOAD
     for (Elf64_Half i = 0; i<bin_infos->elf_header->e_phnum; i++) {
         Elf64_Phdr phdr_entry = bin_infos->prog_header_table[i];  // get the next program header entry
-        if (PT_LOAD != phdr_entry.p_type) continue;
+        if (PT_LOAD != phdr_entry.p_type && PT_TLS != phdr_entry.p_type) continue;
         if (!page_size) page_size = phdr_entry.p_align;
 
         // if we found a loadable segment, allocate memory for the pointer to store it into the array
@@ -309,6 +309,7 @@ int main(const int argc, char **argv) {
     if (0 > load_alloc_segments(&binary_infos, argc-1, argv+1)) JMP_W_CERROR("Failed to load segments", on_error);
 
     fflush(nullptr);
+    DEBUG("Starting transfer")
     transfer_control((void*)binary_infos.entrypoint, binary_infos.initial_user_stack);
 
     do_cleanup:
