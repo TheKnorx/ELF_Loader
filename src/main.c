@@ -123,7 +123,7 @@ int open_and_parse_elf(bin_info_table_T* bin_infos, const char* filename) {
 
     return 0;  // we assume if we came here everything is good :)
     ret:
-    if (errno != retval) return errno;  // return errno if it's not the same as retval
+    if (-errno != retval) return -errno;  // return errno if it's not the same as retval
     return retval;  // else we return the retval code
 }
 
@@ -260,7 +260,7 @@ int load_alloc_segments(bin_info_table_T* bin_infos, int argc, char** argv) {
 
     return 0;
     ret:
-    if (errno != retval) return errno;  // return errno if it's not the same as retval
+    if (-errno != retval) return -errno;  // return errno if it's not the same as retval
     return retval;  // else we return the retval code
 }
 
@@ -309,7 +309,6 @@ int main(const int argc, char **argv) {
     if (0 > load_alloc_segments(&binary_infos, argc-1, argv+1)) JMP_W_CERROR("Failed to load segments", on_error);
 
     fflush(nullptr);
-    DEBUG("Starting transfer")
     transfer_control((void*)binary_infos.entrypoint, binary_infos.initial_user_stack);
 
     do_cleanup:
