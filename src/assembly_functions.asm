@@ -25,7 +25,6 @@ memcpy_n:
 
     ; rdi - parameter dest[restrict .n] - rdi already contains destination memory address
     ; rsi - parameter src[restrict .n] - rsi already contains the source memory address
-    mov     r9, rdi     ; save s[.n] into r9 for later use
     mov     rcx, rdx    ; move parameter n into counter register
     xor     rdx, rdx,   ; clear rdx - use it as a counter for how many chars we copied
     cld                 ; clear direction flag so that we overwrite upwards from the base memory address
@@ -37,7 +36,7 @@ memcpy_n:
     .endcpy:
     movsb               ; finally copy the null terminator into memory
     inc     rdx,        ; increment char counter for the null terminator
-    mov     rax, r9     ; move r9/s[.n] into rax for returning
+    mov     rax, rdx    ; move r9/s[.n] into rax for returning
     ret
 
 ; function for creating the initial user stack
@@ -46,13 +45,15 @@ create_initial_user_stack:
 
 
 ; this function follows the ABI convention
-; we expect the following parameters in the following order: entry_point, -
+; we expect the following parameters in the following order: entry_point, address to set rsp to
 ; we return the following: -
 global transfer_control
 transfer_control:
     ENTER
 
-    call rdi
+    mov     rsp, rsi; set stack pointer to point to stack begin
+    ; mov     rbp, rsi; set base pointer to point to stack begin
+    jmp     rdi     ;  jmp to _start of ELF binary
 
     LEAVE
 

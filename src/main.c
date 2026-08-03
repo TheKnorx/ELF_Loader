@@ -12,7 +12,7 @@
 
 #include "common.h"
 // assembly functions
-extern void transfer_control(void* entry_point);
+extern void transfer_control(void* entry_point, void* stack_addr);
 ssize_t memcpy_n(void* dest, const void* src);
 
 // Macros
@@ -236,26 +236,27 @@ int load_alloc_segments(bin_info_table_T* bin_infos, int argc, char** argv) {
         argv[argc-1]
         NULL              --> argv terminator
         NULL              --> envp terminator
-        auxv...           -->
+        auxv              --> AT_NULL | 0x00
      */
-    *(int*)pa = argc;  // First append argc to the stack
-    *(int*)pa = 0;  // Add some padding between argc and argv so its 8 bytes instead of 4 bytes
+    *(Elf64_Xword*)pa = argc;  // First append argc to the stack as a 64-bit unsigned number
+    // *(int*)pa = 0;  // Add some padding between argc and argv so its 8 bytes instead of 4 bytes
 
     // Next build the argv string table
-    int omitted_elements = 3;  // namely the NULL after argv, envp and auxv
-    Elf64_Addr _sp = (Elf64_Addr)pa+sizeof(int);  // define kind of a stack pointer
+    const int omitted_elements = 4;  // namely the NULL after argv, envp and the auxv pair
+    ssize_t string_length = 0;
+    Elf64_Addr _sp = (Elf64_Addr)pa+sizeof(Elf64_Xword*);  // define kind of a stack pointer
     for (int i = 0; i<argc; i++) {
         // Todo: This string address calculation is completely wrong - have to take into account `i` and the string length
-        const Elf64_Addr string_address = _sp+(argc-i+omitted_elements)*sizeof(char*);
-        ssize_t string_length = memcpy_n((char*)string_address, argv[i]);  // copy the string from argv[i] to the stack
+        const Elf64_Addr string_address = _sp + (argc - i + omitted_elements) * sizeof(char*) + string_length;
+        string_length += memcpy_n((char*)string_address, argv[i]);  // copy the string from argv[i] to the stack
         *(char**)_sp = (char*)string_address;  // 'push' the addr to the copied string onto stack
         _sp += sizeof(char*);
     }
     *((char**)_sp+0) = nullptr;  // 'push' null terminator onto stack to terminate argv
     *((char**)_sp+1) = nullptr;  // 'push' null terminator onto stack to have an empty envp
     *((char**)_sp+2) = AT_NULL;  // 'push' AT_NULL onto stack for empty auxv pair
-    *((char**)_sp+2) = nullptr;  // 'push' null onto stack for empty auxv pairs
-    bin_infos->initial_user_stack = pa;  // append it to the binary information block for later reference/cleanup
+    *((char**)_sp+3) = nullptr;  // 'push' null onto stack for empty auxv pairs
+    bin_infos->initial_user_stack = pa;  // append it to the binary information struct for later reference/cleanup
 
     return 0;
     ret:
@@ -305,10 +306,10 @@ int main(const int argc, char **argv) {
 
     if (0 > open_and_parse_elf(&binary_infos, argv[1])) JMP_W_CERROR("Failed to load ELF header", on_error);
 
-    if (0 > load_alloc_segments(&binary_infos, argc-1, argv)) JMP_W_CERROR("Failed to load segments", on_error);
+    if (0 > load_alloc_segments(&binary_infos, argc-1, argv+1)) JMP_W_CERROR("Failed to load segments", on_error);
 
     fflush(nullptr);
-    transfer_control((void*)binary_infos.entrypoint);
+    transfer_control((void*)binary_infos.entrypoint, binary_infos.initial_user_stack);
 
     do_cleanup:
     cleanup(&binary_infos);
