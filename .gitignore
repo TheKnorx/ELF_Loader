@@ -60,3 +60,4 @@ binfmt_elf.c
 src/main
 src/Test-ELF-Program
 src/Test-ELF-Program.o
+*.gdb_history
