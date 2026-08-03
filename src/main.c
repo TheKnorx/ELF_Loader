@@ -228,15 +228,18 @@ int load_alloc_segments(bin_info_table_T* bin_infos, int argc, char** argv) {
                          "Provided addr by mmap: %p vs. calculated addr from hdr: %p", ret, pa, (void*)new_page_start)
     }
 
-    // Create the initial user stack in the new memory mapping manually
-    /* Layout:
-        argc
+    /* Create the initial user stack in the new memory mapping manually
+     * Layout:
+        ----- low memory -----
+        <actual argv values>
+        argc            <-- rsp
         argv[0]
         ...
         argv[argc-1]
-        NULL              --> argv terminator
-        NULL              --> envp terminator
-        auxv              --> ...
+        NULL            --> argv terminator
+        NULL            --> envp terminator
+        auxv            --> ...
+        ----- high memory -----
 
     * For the auxiliary vector, we orient our vectors based on what the kernel did pass to the program when
     * loading it using the normal loader provided by the kernel:
@@ -264,40 +267,47 @@ int load_alloc_segments(bin_info_table_T* bin_infos, int argc, char** argv) {
         28   AT_RSEQ_ALIGN        rseq allocation alignment      64
         0    AT_NULL              End of vector                  0x0
     */
-    Elf64_Xword* _sp = (Elf64_Xword*)((Elf64_Xword)pa+1024*1024*7);  // define kind of a stack pointer, 7 MiB into stack memory
-    bin_infos->initial_user_stack_sp = (void*)_sp;
-    PUSH(argc, _sp);  // First append argc to the stack as a 64-bit unsigned number
+    {/* We need this block to have any variable-length-array out of scope for the goto's;
+        Otherwise gcc gives us an error, cause apparently its illegal to have a goto jmp into the scope of a VLA */
+        Elf64_Xword* _sp = (Elf64_Xword*)((Elf64_Xword)pa+1024*1024*7);  // define kind of a stack pointer, 7 MiB into stack memory
 
-    // Next build the argv string table
-    const int omitted_elements = 4;  // namely the NULL after argv, envp and the auxv pair
-    ssize_t string_length = 0;
-    for (int i = 0; i<argc; i++) {
-        const Elf64_Addr string_address = (Elf64_Addr)_sp + (argc - i + omitted_elements) * POINTER_SIZE + string_length;
-        string_length += memcpy_n((char*)string_address, argv[i]);  // copy the string from argv[i] to the stack
-        PUSH(string_address, _sp);  // 'push' the addr to the copied string onto stack
+        // First build the argv string table so that the size of the strings don't matter when building the rest of the stack
+        Elf64_Addr* string_table_ptrs[argc-1];
+        // const int omitted_elements = 4;  // namely the NULL after argv, envp and the auxv pair
+        ssize_t string_length = 0;
+        for (int i = 0; i<argc; i++) {
+            // Elf64_Addr* string_address = (Elf64_Addr*)((Elf64_Xword)_sp + (argc - i + omitted_elements) * POINTER_SIZE + string_length);
+            string_length = memcpy_n(_sp, argv[i]);  // copy the string from argv[i] to the stack
+            //PUSH(string_address, _sp);  // 'push' the addr to the copied string onto stack
+            string_table_ptrs[i] = _sp;
+            _sp = (Elf64_Xword *) ((Elf64_Xword)_sp + string_length);  // increment stack pointer
+        }
+        _sp = (Elf64_Xword*)((Elf64_Xword)_sp + 16 - (Elf64_Xword)_sp % 16);  // make it aligned to 16
+        bin_infos->initial_user_stack_sp = (void*)_sp;  // let the stack begin herer
+        PUSH(argc, _sp);  // Append argc to the stack as a 64-bit unsigned number
+        for (int i = 0; i<argc; i++) PUSH(string_table_ptrs, _sp);  // populate argv with the addresses to the strings
+        PUSH(NULL, _sp);  // terminate argv
+        PUSH(NULL, _sp);  // terminate envp
+
+        // push all the needed auxiliary vectors
+        Elf64_auxv_t* auxv = (Elf64_auxv_t*)_sp;  // define an array for auxv
+        int i = 0;
+        auxv[i++] = (Elf64_auxv_t){.a_type = AT_PHDR, .a_un = {bin_infos->elf_header->e_phoff}};
+        auxv[i++] = (Elf64_auxv_t){.a_type = AT_PHENT, .a_un = {bin_infos->elf_header->e_phentsize}};
+        auxv[i++] = (Elf64_auxv_t){.a_type = AT_PHENT, .a_un = {bin_infos->elf_header->e_phnum}};
+        auxv[i++] = (Elf64_auxv_t){.a_type = AT_PAGESZ, .a_un = {page_size}};
+        auxv[i++] = (Elf64_auxv_t){.a_type = AT_BASE, .a_un = {0x00}};  // we dont have an interpreter
+        auxv[i++] = (Elf64_auxv_t){.a_type = AT_FLAGS, .a_un = {0x00}};
+        auxv[i++] = (Elf64_auxv_t){.a_type = AT_ENTRY, .a_un = {bin_infos->elf_header->e_entry}};
+        auxv[i++] = (Elf64_auxv_t){.a_type = AT_UID, .a_un = {getuid()}};
+        auxv[i++] = (Elf64_auxv_t){.a_type = AT_EUID, .a_un = {geteuid()}};
+        auxv[i++] = (Elf64_auxv_t){.a_type = AT_GID, .a_un = {getgid()}};
+        auxv[i++] = (Elf64_auxv_t){.a_type = AT_EGID, .a_un = {getegid()}};
+        auxv[i++] = (Elf64_auxv_t){.a_type = AT_CLKTCK, .a_un = {100}};  // we stick to the kernel value - whatever that means
+        auxv[i] = (Elf64_auxv_t){.a_type = AT_NULL, .a_un = {0x00}};  // end of auxiliary vector
+
+        bin_infos->initial_user_stack = pa;  // append it to the binary information struct for later reference/cleanup
     }
-    PUSH(NULL, _sp);
-    PUSH(NULL, _sp);
-
-    // push all the needed auxiliary vectors
-    Elf64_auxv_t* auxv = (Elf64_auxv_t*)_sp;  // define an array for auxv
-    int i = 0;
-    auxv[i++] = (Elf64_auxv_t){.a_type = AT_PHDR, .a_un = {bin_infos->elf_header->e_phoff}};
-    auxv[i++] = (Elf64_auxv_t){.a_type = AT_PHENT, .a_un = {bin_infos->elf_header->e_phentsize}};
-    auxv[i++] = (Elf64_auxv_t){.a_type = AT_PHENT, .a_un = {bin_infos->elf_header->e_phnum}};
-    auxv[i++] = (Elf64_auxv_t){.a_type = AT_PAGESZ, .a_un = {page_size}};
-    auxv[i++] = (Elf64_auxv_t){.a_type = AT_BASE, .a_un = {0x00}};  // we dont have an interpreter
-    auxv[i++] = (Elf64_auxv_t){.a_type = AT_FLAGS, .a_un = {0x00}};
-    auxv[i++] = (Elf64_auxv_t){.a_type = AT_ENTRY, .a_un = {bin_infos->elf_header->e_entry}};
-    auxv[i++] = (Elf64_auxv_t){.a_type = AT_UID, .a_un = {getuid()}};
-    auxv[i++] = (Elf64_auxv_t){.a_type = AT_EUID, .a_un = {geteuid()}};
-    auxv[i++] = (Elf64_auxv_t){.a_type = AT_GID, .a_un = {getgid()}};
-    auxv[i++] = (Elf64_auxv_t){.a_type = AT_EGID, .a_un = {getegid()}};
-    auxv[i++] = (Elf64_auxv_t){.a_type = AT_CLKTCK, .a_un = {100}};  // we stick to the kernel value - whatever that means
-    auxv[i] = (Elf64_auxv_t){.a_type = AT_NULL, .a_un = {0x00}};  // end of auxiliary vector
-
-    bin_infos->initial_user_stack = pa;  // append it to the binary information struct for later reference/cleanup
-
     return 0;
     ret:
     if (-errno != retval) return -errno;  // return errno if it's not the same as retval
