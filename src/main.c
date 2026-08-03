@@ -24,6 +24,10 @@ ssize_t memcpy_n(void* dest, const void* src);
 #define JMP_W_CERROR(ERROR_STR, JMP_LABEL, ...) { PRINT_CUSTOM_ERROR(ERROR_STR __VA_OPT__(,) __VA_ARGS__); goto JMP_LABEL; }
 #define JMP_W_ERROR(ERROR_STR, JMP_LABEL) { PRINT_ERROR(ERROR_STR); goto JMP_LABEL; }
 
+#define DEFAULT_STACK_SIZE (8 * 1024 * 1024)
+// Move VAL into SP and increment SP
+#define PUSH(VAL, SP) {*(Elf64_Xword*)_sp = VAL; SP++;}
+
 
 typedef struct bin_info_table_S {
     Elf64_Addr  entrypoint;  // this maybe zero
@@ -33,6 +37,7 @@ typedef struct bin_info_table_S {
     int allocd_segs_size;  // len of allocd_segs array
     Elf64_Addr* allocd_segs_sizes;  // len of each allocd_segs mapping
     void* initial_user_stack;
+    void* initial_user_stack_sp;  // stack pointer to set for the initial user stack
     void** allocd_segs;  // array of pointer to allocated segments
 } bin_info_table_T;
 
@@ -168,7 +173,7 @@ int load_alloc_segments(bin_info_table_T* bin_infos, int argc, char** argv) {
          * page_start + page_offset
          */
 
-        Elf64_Addr page_start = phdr_entry.p_vaddr - phdr_entry.p_vaddr % phdr_entry.p_align;
+        Elf64_Addr page_start = phdr_entry.p_vaddr - phdr_entry.p_vaddr % page_size;
         Elf64_Addr page_offset = phdr_entry.p_vaddr - page_start;
         mapping_size = page_offset + phdr_entry.p_memsz;
         bin_infos->allocd_segs_sizes[i] = mapping_size;
@@ -212,14 +217,14 @@ int load_alloc_segments(bin_info_table_T* bin_infos, int argc, char** argv) {
     new_page_start = new_page_start + mapping_size;  // add to the previous addr the mapping size
     new_page_start = new_page_start + (page_size - new_page_start % page_size);  // make it page aligned
 
-    size_t argv_size = sizeof(char*) * argc;  // begin by adding the space needed for the pointers
-    for (int i = 0; i<argc; i++) argv_size += strlen(argv[i]);  // calculate and add the size of each string
+    // size_t argv_size = sizeof(char*) * argc;  // begin by adding the space needed for the pointers
+    // for (int i = 0; i<argc; i++) argv_size += strlen(argv[i]);  // calculate and add the size of each string
 
-    const size_t new_mapping_size = sizeof(int) + argv_size + sizeof(unsigned char);  // sizeof (argc, argv, NULL)
-    void* const pa = mmap((void*)new_page_start, new_mapping_size, PROT_WRITE | PROT_READ,
+    // const size_t new_mapping_size = sizeof(int) + argv_size + sizeof(unsigned char);  // sizeof (argc, argv, NULL)
+    void* const pa = mmap((void*)new_page_start, DEFAULT_STACK_SIZE, PROT_WRITE | PROT_READ,
             MAP_PRIVATE | MAP_ANONYMOUS | MAP_FIXED, -1, 0);
     if (MAP_FAILED == pa) {
-        PRINT_CUSTOM_ERROR("Failed to allocate memory at address %p with size %lu", (void*)new_page_start, new_mapping_size);
+        PRINT_CUSTOM_ERROR("Failed to allocate memory at address %p with size %d", (void*)new_page_start, DEFAULT_STACK_SIZE);
         PRINT_ERROR("Error from mmap");
         goto ret;
     }
@@ -238,18 +243,21 @@ int load_alloc_segments(bin_info_table_T* bin_infos, int argc, char** argv) {
         NULL              --> envp terminator
         auxv              --> AT_NULL | 0x00
      */
-    *(Elf64_Xword*)pa = argc;  // First append argc to the stack as a 64-bit unsigned number
-    // *(int*)pa = 0;  // Add some padding between argc and argv so its 8 bytes instead of 4 bytes
+
+    Elf64_Addr _sp = (Elf64_Addr)pa+1024*1024*7;  // define kind of a stack pointer, 7 MiB into stack memory
+    bin_infos->initial_user_stack_sp = (void*)_sp;
+    *(Elf64_Xword*)_sp = argc;  // First append argc to the stack as a 64-bit unsigned number
+    _sp += sizeof(Elf64_Addr);
 
     // Next build the argv string table
     const int omitted_elements = 4;  // namely the NULL after argv, envp and the auxv pair
     ssize_t string_length = 0;
-    Elf64_Addr _sp = (Elf64_Addr)pa+sizeof(Elf64_Xword*);  // define kind of a stack pointer
     for (int i = 0; i<argc; i++) {
         // Todo: This string address calculation is completely wrong - have to take into account `i` and the string length
         const Elf64_Addr string_address = _sp + (argc - i + omitted_elements) * sizeof(char*) + string_length;
         string_length += memcpy_n((char*)string_address, argv[i]);  // copy the string from argv[i] to the stack
         *(char**)_sp = (char*)string_address;  // 'push' the addr to the copied string onto stack
+        //PUSH(string_address, _sp);  // 'push' the addr to the copied string onto stack
         _sp += sizeof(char*);
     }
     *((char**)_sp+0) = nullptr;  // 'push' null terminator onto stack to terminate argv
@@ -289,7 +297,7 @@ void cleanup(bin_info_table_T* bin_info) {
 int main(const int argc, char **argv) {
     DEBUG("Entering main");
     if (argc < 2) {
-        printf("Usage: %s <path/to/ELF/binary>", *argv);
+        printf("Usage: %s <path/to/ELF/binary>\n", *argv);
         return 0;
     }
     int retval = EXIT_SUCCESS;
@@ -309,7 +317,7 @@ int main(const int argc, char **argv) {
     if (0 > load_alloc_segments(&binary_infos, argc-1, argv+1)) JMP_W_CERROR("Failed to load segments", on_error);
 
     fflush(nullptr);
-    transfer_control((void*)binary_infos.entrypoint, binary_infos.initial_user_stack);
+    transfer_control((void*)binary_infos.entrypoint, binary_infos.initial_user_stack_sp);
 
     do_cleanup:
     cleanup(&binary_infos);
