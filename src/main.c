@@ -12,24 +12,7 @@
 #include <unistd.h>
 #include <sys/auxv.h>
 
-#include "common.h"
-// assembly functions
-extern void transfer_control(void* entry_point, void* stack_addr);
-ssize_t memcpy_n(void* dest, const void* src);
-
-/* Macros */
-#define ELF_HEADER_SIZE (sizeof(Elf64_Ehdr))
-#define NOP __asm__("NOP")  // No-Operation - assembly instruction
-
-// I know those macro are of bad coding style, but it also helps massively in reducing duplicate code, so I take it
-#define JMP_W_CERROR(ERROR_STR, JMP_LABEL, ...) { PRINT_CUSTOM_ERROR(ERROR_STR __VA_OPT__(,) __VA_ARGS__); goto JMP_LABEL; }
-#define JMP_W_ERROR(ERROR_STR, JMP_LABEL) { PRINT_ERROR(ERROR_STR); goto JMP_LABEL; }
-
-#define DEFAULT_STACK_SIZE (8 * 1024 * 1024)
-// Move VAL into SP and increment SP
-#define PUSH(VAL, SP) {*_sp = (Elf64_Xword)VAL; SP = (Elf64_Xword*)((Elf64_Xword)SP + POINTER_SIZE);}
-#define POINTER_SIZE sizeof(Elf64_Addr*)
-#define M_TO_STR(M) #M
+#include "main.h"
 
 typedef struct bin_info_table_S {
     Elf64_Addr  entrypoint;  // this maybe zero
