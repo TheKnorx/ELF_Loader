@@ -230,33 +230,10 @@ int load_alloc_segments(bin_info_table_T* bin_infos, int argc, char** argv) {
         auxv            --> ...
         ----- high memory -----
 
-    * For the auxiliary vector, we orient our vectors based on what the kernel did pass to the program when
-    * loading it using the normal loader provided by the kernel:
-        33   AT_SYSINFO_EHDR      System-supplied DSO's ELF header 0x7ffff7ffd000
-        51   AT_MINSIGSTKSZ       Minimum stack size for signal delivery 0xe30
-        16   AT_HWCAP             Machine-dependent CPU capability hints 0xbfebfbff
-        6    AT_PAGESZ            System page size               4096
-        17   AT_CLKTCK            Frequency of times()           100
-        3    AT_PHDR              Program headers for program    0x400040
-        4    AT_PHENT             Size of program header entry   56
-        5    AT_PHNUM             Number of program headers      12
-        7    AT_BASE              Base address of interpreter    0x0
-        8    AT_FLAGS             Flags                          0x0
-        9    AT_ENTRY             Entry point of program         0x402e20
-        11   AT_UID               Real user ID                   1000
-        12   AT_EUID              Effective user ID              1000
-        13   AT_GID               Real group ID                  1000
-        14   AT_EGID              Effective group ID             1000
-        23   AT_SECURE            Boolean, was exec setuid-like? 0
-        25   AT_RANDOM            Address of 16 random bytes     0x7fffffffe4b9
-        26   AT_HWCAP2            Extension of AT_HWCAP          0x2
-        31   AT_EXECFN            File name of executable        0x7fffffffefb1 "/home/knorx/Development/C_ASM-Projects/ELF_Loader/src/Test-ELF-Program"
-        15   AT_PLATFORM          String identifying platform    0x7fffffffe4c9 "x86_64"
-        27   AT_RSEQ_FEATURE_SIZE rseq supported feature size    33
-        28   AT_RSEQ_ALIGN        rseq allocation alignment      64
-        0    AT_NULL              End of vector                  0x0
+    * Set the auxiliary vector (auxv) pairs according to the elf file and our environment and
+    * the kernel/machine specific auxv pairs according to what the kernel did pass to this loader
     */
-    {/* We need this block to have any variable-length-array out of scope for the goto's;
+    {/* We need this block to have the variable-length-array out of scope for the goto's;
         Otherwise gcc gives us an error, cause apparently its illegal to have a goto jmp into the scope of a VLA */
         Elf64_Xword* _sp = (Elf64_Xword*)((Elf64_Xword)pa+1024*1024*7);  // define kind of a stack pointer, 7 MiB into stack memory
 
