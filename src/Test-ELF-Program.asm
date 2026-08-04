@@ -1,5 +1,6 @@
-; nasm -f elf64 Test-ELF-Program.asm
-; gcc -static -no-pie Test-ELF-Program.o -o Test-ELF-Program
+BITS 64
+; nasm -f elf64 -g -F dwarf Test-ELF-Program.asm
+; gcc -static -no-pie -g -rdynamic -lgcc Test-ELF-Program.o -o Test-ELF-Program
 
 section .bss
 section .data
