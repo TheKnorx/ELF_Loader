@@ -2,14 +2,15 @@
 
 // Includes
 #define _FILE_OFFSET_BITS 64
-#include <assert.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <elf.h>
 #include <errno.h>
 #include <string.h>
+#include <time.h>
 #include <sys/mman.h>
 #include <unistd.h>
+#include <sys/auxv.h>
 
 #include "common.h"
 // assembly functions
@@ -28,6 +29,7 @@ ssize_t memcpy_n(void* dest, const void* src);
 // Move VAL into SP and increment SP
 #define PUSH(VAL, SP) {*_sp = (Elf64_Xword)VAL; SP = (Elf64_Xword*)((Elf64_Xword)SP + POINTER_SIZE);}
 #define POINTER_SIZE sizeof(Elf64_Addr*)
+#define M_TO_STR(M) #M
 
 typedef struct bin_info_table_S {
     Elf64_Addr  entrypoint;  // this maybe zero
@@ -138,12 +140,15 @@ int load_alloc_segments(bin_info_table_T* bin_infos, int argc, char** argv) {
     Elf64_Addr** allocd_segs_sizes = &bin_infos->allocd_segs_sizes;  // pointer to address of array allocd_segs_size
     Elf64_Xword page_size = 0;      // page size specified in the elf program headers - for later usage
     Elf64_Addr mapping_size = 0;    // define the variable that will hold the mapping size here for later usage
+    // define the address to the program header table relative to the first loaded segment here for later usage
+    Elf64_Phdr* phdr_table_vaddr = nullptr;
 
     // iterate over the program header table and load the segments we need --> p_type=PT_LOAD
     for (Elf64_Half i = 0; i<bin_infos->elf_header->e_phnum; i++) {
         Elf64_Phdr phdr_entry = bin_infos->prog_header_table[i];  // get the next program header entry
-        if (PT_LOAD != phdr_entry.p_type) continue;  // skip all other segments
+        if (PT_LOAD != phdr_entry.p_type && PT_TLS != phdr_entry.p_type) continue;  // skip all other segments
         if (!page_size) page_size = phdr_entry.p_align;
+        if (!phdr_table_vaddr) phdr_table_vaddr = (Elf64_Phdr*)(phdr_entry.p_vaddr + bin_infos->elf_header->e_phoff);
 
         // if we found a loadable segment, allocate memory for the pointer to store it into the array
         bin_infos->allocd_segs_size++;  // increase the length index
@@ -190,7 +195,8 @@ int load_alloc_segments(bin_info_table_T* bin_infos, int argc, char** argv) {
             JMP_W_CERROR("Failed to allocate memory for segment at correct address. \n"
                          "Provided addr by mmap: %p vs. calculated addr from hdr: %p", ret, pa, (void*)page_start)
 
-        DEBUG("Successfully created memory mapping at address %p with size %lu", (void*)page_start, mapping_size);
+        DEBUG("Successfully created memory mapping at address %p with size %lu of type %s", (void*)page_start,
+            mapping_size, phdr_entry.p_type == PT_LOAD ? M_TO_STR(PT_LOAD) : M_TO_STR(PT_TLS));
         fflush(stdout);
 
         // read in the segment data from the elf file and write it into the allocated memory of the segment
@@ -271,6 +277,11 @@ int load_alloc_segments(bin_info_table_T* bin_infos, int argc, char** argv) {
         Otherwise gcc gives us an error, cause apparently its illegal to have a goto jmp into the scope of a VLA */
         Elf64_Xword* _sp = (Elf64_Xword*)((Elf64_Xword)pa+1024*1024*7);  // define kind of a stack pointer, 7 MiB into stack memory
 
+        Elf64_Addr* random_bytes = _sp;
+        // create 16 random bytes - for now this is 'random' enough
+        PUSH("1", _sp);  // 8 bytes
+        PUSH("2", _sp);  // 8 bytes
+
         // First build the argv string table so that the size of the strings don't matter when building the rest of the stack
         Elf64_Addr* string_table_ptrs[argc-1];
         // const int omitted_elements = 4;  // namely the NULL after argv, envp and the auxv pair
@@ -292,9 +303,9 @@ int load_alloc_segments(bin_info_table_T* bin_infos, int argc, char** argv) {
         // push all the needed auxiliary vectors
         Elf64_auxv_t* auxv = (Elf64_auxv_t*)_sp;  // define an array for auxv
         int i = 0;
-        auxv[i++] = (Elf64_auxv_t){.a_type = AT_PHDR, .a_un = {bin_infos->elf_header->e_phoff}};
+        auxv[i++] = (Elf64_auxv_t){.a_type = AT_PHDR, .a_un = {(uint64_t)phdr_table_vaddr}};
         auxv[i++] = (Elf64_auxv_t){.a_type = AT_PHENT, .a_un = {bin_infos->elf_header->e_phentsize}};
-        auxv[i++] = (Elf64_auxv_t){.a_type = AT_PHENT, .a_un = {bin_infos->elf_header->e_phnum}};
+        auxv[i++] = (Elf64_auxv_t){.a_type = AT_PHNUM, .a_un = {bin_infos->elf_header->e_phnum}};
         auxv[i++] = (Elf64_auxv_t){.a_type = AT_PAGESZ, .a_un = {page_size}};
         auxv[i++] = (Elf64_auxv_t){.a_type = AT_BASE, .a_un = {0x00}};  // we dont have an interpreter
         auxv[i++] = (Elf64_auxv_t){.a_type = AT_FLAGS, .a_un = {0x00}};
@@ -303,7 +314,19 @@ int load_alloc_segments(bin_info_table_T* bin_infos, int argc, char** argv) {
         auxv[i++] = (Elf64_auxv_t){.a_type = AT_EUID, .a_un = {geteuid()}};
         auxv[i++] = (Elf64_auxv_t){.a_type = AT_GID, .a_un = {getgid()}};
         auxv[i++] = (Elf64_auxv_t){.a_type = AT_EGID, .a_un = {getegid()}};
-        auxv[i++] = (Elf64_auxv_t){.a_type = AT_CLKTCK, .a_un = {100}};  // we stick to the kernel value - whatever that means
+        auxv[i++] = (Elf64_auxv_t){.a_type = AT_CLKTCK, .a_un = {sysconf(_SC_CLK_TCK)}};
+        auxv[i++] = (Elf64_auxv_t){.a_type = AT_PLATFORM, .a_un = {getauxval(AT_PLATFORM)}};
+        auxv[i++] = (Elf64_auxv_t){.a_type = AT_HWCAP, .a_un = {getauxval(AT_HWCAP)}};
+        auxv[i++] = (Elf64_auxv_t){.a_type = AT_HWCAP2, .a_un = {getauxval(AT_HWCAP2)}};
+        auxv[i++] = (Elf64_auxv_t){.a_type = AT_HWCAP3, .a_un = {getauxval(AT_HWCAP3)}};
+        auxv[i++] = (Elf64_auxv_t){.a_type = AT_HWCAP4, .a_un = {getauxval(AT_HWCAP4)}};
+        auxv[i++] = (Elf64_auxv_t){.a_type = AT_SECURE, .a_un = {0}};
+        auxv[i++] = (Elf64_auxv_t){.a_type = AT_RANDOM, .a_un = {(uint64_t)random_bytes}};
+        auxv[i++] = (Elf64_auxv_t){.a_type = AT_RSEQ_FEATURE_SIZE, .a_un = {getauxval(AT_RSEQ_FEATURE_SIZE)}};
+        auxv[i++] = (Elf64_auxv_t){.a_type = AT_RSEQ_ALIGN, .a_un = {getauxval(AT_RSEQ_ALIGN)}};
+        auxv[i++] = (Elf64_auxv_t){.a_type = AT_EXECFN, .a_un = {(uint64_t)string_table_ptrs[0]}};  // ptr to argv[0]
+        auxv[i++] = (Elf64_auxv_t){.a_type = AT_SYSINFO_EHDR, .a_un = {getauxval(AT_SYSINFO_EHDR)}};
+        auxv[i++] = (Elf64_auxv_t){.a_type = AT_MINSIGSTKSZ, .a_un = {getauxval(AT_MINSIGSTKSZ)}};
         auxv[i] = (Elf64_auxv_t){.a_type = AT_NULL, .a_un = {0x00}};  // end of auxiliary vector
 
         bin_infos->initial_user_stack = pa;  // append it to the binary information struct for later reference/cleanup
@@ -343,6 +366,7 @@ int main(const int argc, char **argv) {
         return 0;
     }
     int retval = EXIT_SUCCESS;
+    srand(time(NULL));
 
     bin_info_table_T binary_infos = {
         .entrypoint = 0x000000000000,  // empty 64-bit address
