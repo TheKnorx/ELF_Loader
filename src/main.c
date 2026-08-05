@@ -24,6 +24,10 @@ typedef struct bin_info_table_S {
     void* initial_user_stack;
     void* initial_user_stack_sp;  // stack pointer to set for the initial user stack
     void** allocd_segs;  // array of pointer to allocated segments
+    Elf64_Addr last_mapping_size;  // holds the last mapping size --> for calculating the next mapping
+    Elf64_Xword page_size;  // page size specified in the elf program headers
+    Elf64_Phdr* phdr_table_vaddr;  // virtual address of the process header loaded into memory  relative to the first loaded segment
+
 } bin_info_table_T;
 
 /**
@@ -117,21 +121,25 @@ int open_and_parse_elf(bin_info_table_T* bin_infos, const char* filename) {
     return retval;  // else we return the retval code
 }
 
-int load_alloc_segments(bin_info_table_T* bin_infos, int argc, char** argv) {
+/**
+ * Function for loading the segment headers from the program header table into memory
+ * and mapping all the relevant segments into the virtual address space of the new process
+ *
+ * @param bin_infos Pointer to data field for storing the return values of this function
+ * @return Returns 0 if successful, an errno code if not successful
+ */
+int load_alloc_segments(bin_info_table_T* bin_infos) {
     int retval = -EIO;  // we just make an I/O-Error the default here
     void*** allocd_segs = &bin_infos->allocd_segs;  // pointer to address of array allocd_segs
     Elf64_Addr** allocd_segs_sizes = &bin_infos->allocd_segs_sizes;  // pointer to address of array allocd_segs_size
     Elf64_Xword page_size = 0;      // page size specified in the elf program headers - for later usage
-    Elf64_Addr mapping_size = 0;    // define the variable that will hold the mapping size here for later usage
-    // define the address to the program header table relative to the first loaded segment here for later usage
-    Elf64_Phdr* phdr_table_vaddr = nullptr;
 
     // iterate over the program header table and load the segments we need --> p_type=PT_LOAD
     for (Elf64_Half i = 0; i<bin_infos->elf_header->e_phnum; i++) {
         Elf64_Phdr phdr_entry = bin_infos->prog_header_table[i];  // get the next program header entry
         if (PT_LOAD != phdr_entry.p_type && PT_TLS != phdr_entry.p_type) continue;  // skip all other segments
-        if (!page_size) page_size = phdr_entry.p_align;
-        if (!phdr_table_vaddr) phdr_table_vaddr = (Elf64_Phdr*)(phdr_entry.p_vaddr + bin_infos->elf_header->e_phoff);
+        if (!page_size && 0 != phdr_entry.p_align) page_size = phdr_entry.p_align;
+        if (!bin_infos->phdr_table_vaddr) bin_infos->phdr_table_vaddr = (Elf64_Phdr*)(phdr_entry.p_vaddr + bin_infos->elf_header->e_phoff);
 
         // if we found a loadable segment, allocate memory for the pointer to store it into the array
         bin_infos->allocd_segs_size++;  // increase the length index
@@ -161,9 +169,10 @@ int load_alloc_segments(bin_info_table_T* bin_infos, int argc, char** argv) {
          * page_start + page_offset
          */
 
-        Elf64_Addr page_start = phdr_entry.p_vaddr - phdr_entry.p_vaddr % page_size;
-        Elf64_Addr page_offset = phdr_entry.p_vaddr - page_start;
-        mapping_size = page_offset + phdr_entry.p_memsz;
+        const Elf64_Addr page_start = phdr_entry.p_vaddr - phdr_entry.p_vaddr % page_size;
+        const Elf64_Addr page_offset = phdr_entry.p_vaddr - page_start;
+        const Elf64_Addr mapping_size = page_offset + phdr_entry.p_memsz;
+        bin_infos->last_mapping_size = mapping_size;
         bin_infos->allocd_segs_sizes[i] = mapping_size;
         // always set the protection of the mapping to write, cause we still have to write the segment data
         void* const pa = mmap((void*)page_start, mapping_size, PROT_WRITE,
@@ -196,6 +205,22 @@ int load_alloc_segments(bin_info_table_T* bin_infos, int argc, char** argv) {
         if (-1 == mprotect(pa, phdr_entry.p_memsz, mmap_seg_prot)) JMP_W_ERROR("memprotect failed", ret);
     }
 
+    return 0;
+    ret:
+    if (-errno != retval) return -errno;  // return errno if it's not the same as retval
+    return retval;  // else we return the retval code
+}
+
+/**
+ * Function for creating the initial user stack and filling it with argc, argv, envp and auxv
+ *
+ * @param bin_infos Pointer to data field for storing the return values of this function
+ * @param argc The length of argv
+ * @param argv The argv to pass to the new process
+ * @return Returns 0 if successful, an errno code if not successful
+ */
+int create_initial_stack(bin_info_table_T* bin_infos, const int argc, char** argv) {
+    int retval = -EIO;
     /* Create a new memory mapping for argc, argv, etc.
      * For that we calculate the beginning of the next page starting from the last memory mapping
      * By doing that here, we have some code duplication but this is inevitable
@@ -203,8 +228,8 @@ int load_alloc_segments(bin_info_table_T* bin_infos, int argc, char** argv) {
      * We also assume that the address of the last mapped section is already page aligned (- it has to be)
      */
     Elf64_Addr new_page_start = (Elf64_Addr) bin_infos->allocd_segs[bin_infos->allocd_segs_size-1];
-    new_page_start = new_page_start + mapping_size;  // add to the previous addr the mapping size
-    new_page_start = new_page_start + (page_size - new_page_start % page_size);  // make it page aligned
+    new_page_start = new_page_start + bin_infos->last_mapping_size;  // add to the previous addr the mapping size
+    new_page_start = new_page_start + (bin_infos->page_size - new_page_start % bin_infos->page_size);  // make it page aligned
     void* const pa = mmap((void*)new_page_start, DEFAULT_STACK_SIZE, PROT_WRITE | PROT_READ,
             MAP_PRIVATE | MAP_ANONYMOUS | MAP_FIXED, -1, 0);
     if (MAP_FAILED == pa) {
@@ -263,10 +288,10 @@ int load_alloc_segments(bin_info_table_T* bin_infos, int argc, char** argv) {
         // push all the needed auxiliary vectors
         Elf64_auxv_t* auxv = (Elf64_auxv_t*)_sp;  // define an array for auxv
         int i = 0;
-        auxv[i++] = (Elf64_auxv_t){.a_type = AT_PHDR, .a_un = {(uint64_t)phdr_table_vaddr}};
+        auxv[i++] = (Elf64_auxv_t){.a_type = AT_PHDR, .a_un = {(uint64_t)bin_infos->phdr_table_vaddr}};
         auxv[i++] = (Elf64_auxv_t){.a_type = AT_PHENT, .a_un = {bin_infos->elf_header->e_phentsize}};
         auxv[i++] = (Elf64_auxv_t){.a_type = AT_PHNUM, .a_un = {bin_infos->elf_header->e_phnum}};
-        auxv[i++] = (Elf64_auxv_t){.a_type = AT_PAGESZ, .a_un = {page_size}};
+        auxv[i++] = (Elf64_auxv_t){.a_type = AT_PAGESZ, .a_un = {bin_infos->page_size}};
         auxv[i++] = (Elf64_auxv_t){.a_type = AT_BASE, .a_un = {0x00}};  // we dont have an interpreter
         auxv[i++] = (Elf64_auxv_t){.a_type = AT_FLAGS, .a_un = {0x00}};
         auxv[i++] = (Elf64_auxv_t){.a_type = AT_ENTRY, .a_un = {bin_infos->elf_header->e_entry}};
@@ -297,27 +322,34 @@ int load_alloc_segments(bin_info_table_T* bin_infos, int argc, char** argv) {
     return retval;  // else we return the retval code
 }
 
-void cleanup(bin_info_table_T* bin_info) {
+/**
+ * Function for freeing all the allocated memory, closing all files, etc...
+ *
+ * @param bin_infos Pointer to data field for storing the return values of this function
+ * @return -
+ */
+void cleanup(bin_info_table_T* bin_infos) {
     DEBUG("Cleaning up")
-    free(bin_info->prog_header_table);
-    bin_info->prog_header_table = nullptr;
-    free(bin_info->elf_header);
-    bin_info->elf_header = nullptr;
-    if (nullptr == bin_info->allocd_segs) goto allocd_segs_free_end;
-    for (int i = 0; i<bin_info->allocd_segs_size; i++) {
-        if (MAP_FAILED != bin_info->allocd_segs[i]) munmap(bin_info->allocd_segs[i], bin_info->allocd_segs_sizes[i]);
+    free(bin_infos->prog_header_table);
+    bin_infos->prog_header_table = nullptr;
+    free(bin_infos->elf_header);
+    bin_infos->elf_header = nullptr;
+    if (nullptr == bin_infos->allocd_segs) goto allocd_segs_free_end;
+    for (int i = 0; i<bin_infos->allocd_segs_size; i++) {
+        if (MAP_FAILED != bin_infos->allocd_segs[i]) munmap(bin_infos->allocd_segs[i], bin_infos->allocd_segs_sizes[i]);
     }
-    free(bin_info->allocd_segs);
+    free(bin_infos->allocd_segs);
     allocd_segs_free_end:
-    free(bin_info->allocd_segs_sizes);
-    if (MAP_FAILED != bin_info->initial_user_stack) munmap(bin_info->initial_user_stack, sizeof(void*));
+    free(bin_infos->allocd_segs_sizes);
+    if (MAP_FAILED != bin_infos->initial_user_stack) munmap(bin_infos->initial_user_stack, sizeof(void*));
 }
 
 /**
  * Main function to start the loading and executing of the ELF binary
  *
- * @param argc
+ * @param argc The length of argv
  * @param argv [1] The path and file name to the ELF binary
+ * @param argv [2:] The argv to pass to the new process
  */
 int main(const int argc, char **argv) {
     DEBUG("Entering main");
@@ -328,19 +360,13 @@ int main(const int argc, char **argv) {
     int retval = EXIT_SUCCESS;
     srand(time(NULL));
 
-    bin_info_table_T binary_infos = {
-        .entrypoint = 0x000000000000,  // empty 64-bit address
-        .elf_header = nullptr,
-        .prog_header_table = nullptr,
-        .allocd_segs_size = 0,
-        .allocd_segs = nullptr,
-        .elf_fstream = nullptr,
-        .initial_user_stack = nullptr,
-    };
+    bin_info_table_T binary_infos = {0};
 
     if (0 > open_and_parse_elf(&binary_infos, argv[1])) JMP_W_CERROR("Failed to load ELF header", on_error);
 
-    if (0 > load_alloc_segments(&binary_infos, argc-1, argv+1)) JMP_W_CERROR("Failed to load segments", on_error);
+    if (0 > load_alloc_segments(&binary_infos)) JMP_W_CERROR("Failed to load segments", on_error);
+
+    if (0 > create_initial_stack(&binary_infos, argc-1, argv+1)) JMP_W_CERROR("Failed to create initial stack", on_error);
 
     fflush(nullptr);
     transfer_control((void*)binary_infos.entrypoint, binary_infos.initial_user_stack_sp);
