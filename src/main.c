@@ -97,9 +97,6 @@ int open_and_parse_elf(bin_info_table_T* bin_infos, const char* filename) {
     //check if the header offset does point to a valid location within the file
     if (elf_header->e_phoff > file_size) JMP_W_CERROR("Program header table is beyond EOF", ret);
 
-    /* we can ignore the section header (I think/hope) as this program is purly
-     * intended for loading ELF files, not for linking or relocating stuff */
-
     // next get the program header table
     /* for now, we just ignore the fact that if the file size is greater than a long,
      * and simply 'throw' a raw error when the seek fails */
@@ -316,6 +313,7 @@ int create_initial_stack(bin_info_table_T* bin_infos, const int argc, char** arg
 /***/
 int do_relocations(bin_info_table_T* bin_infos) {
     STANDARD_FUNCTION_START(-EIO);
+
 
 
     STANDARD_FUNCTION_RETURN;
