@@ -132,13 +132,12 @@ int load_alloc_segments(bin_info_table_T* bin_infos) {
     int retval = -EIO;  // we just make an I/O-Error the default here
     void*** allocd_segs = &bin_infos->allocd_segs;  // pointer to address of array allocd_segs
     Elf64_Addr** allocd_segs_sizes = &bin_infos->allocd_segs_sizes;  // pointer to address of array allocd_segs_size
-    Elf64_Xword page_size = 0;      // page size specified in the elf program headers - for later usage
 
     // iterate over the program header table and load the segments we need --> p_type=PT_LOAD
     for (Elf64_Half i = 0; i<bin_infos->elf_header->e_phnum; i++) {
         Elf64_Phdr phdr_entry = bin_infos->prog_header_table[i];  // get the next program header entry
         if (PT_LOAD != phdr_entry.p_type && PT_TLS != phdr_entry.p_type) continue;  // skip all other segments
-        if (!page_size && 0 != phdr_entry.p_align) page_size = phdr_entry.p_align;
+        if (!bin_infos->page_size && 0 != phdr_entry.p_align) bin_infos->page_size = phdr_entry.p_align;
         if (!bin_infos->phdr_table_vaddr) bin_infos->phdr_table_vaddr = (Elf64_Phdr*)(phdr_entry.p_vaddr + bin_infos->elf_header->e_phoff);
 
         // if we found a loadable segment, allocate memory for the pointer to store it into the array
@@ -169,7 +168,7 @@ int load_alloc_segments(bin_info_table_T* bin_infos) {
          * page_start + page_offset
          */
 
-        const Elf64_Addr page_start = phdr_entry.p_vaddr - phdr_entry.p_vaddr % page_size;
+        const Elf64_Addr page_start = phdr_entry.p_vaddr - phdr_entry.p_vaddr % bin_infos->page_size;
         const Elf64_Addr page_offset = phdr_entry.p_vaddr - page_start;
         const Elf64_Addr mapping_size = page_offset + phdr_entry.p_memsz;
         bin_infos->last_mapping_size = mapping_size;
