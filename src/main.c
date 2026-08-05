@@ -54,8 +54,7 @@ typedef struct bin_info_table_S {
  */
 int open_and_parse_elf(bin_info_table_T* bin_infos, const char* filename) {
     DEBUG("Parsing elf file");
-    int retval = -ENOEXEC;
-    errno = retval;
+    STANDARD_FUNCTION_START(-ENOEXEC);
 
     // create a stdio file obj to the elf binary
     FILE* elf_file_stream = fopen(filename, "r");
@@ -113,10 +112,7 @@ int open_and_parse_elf(bin_info_table_T* bin_infos, const char* filename) {
     if (phdrtsize != fread(bin_infos->prog_header_table, 1, phdrtsize, elf_file_stream))
         JMP_W_CERROR("Failed to read the program header table", ret);
 
-    return 0;  // we assume if we came here everything is good :)
-    ret:
-    if (-errno != retval) return -errno;  // return errno if it's not the same as retval
-    return retval;  // else we return the retval code
+    STANDARD_FUNCTION_RETURN;
 }
 
 /**
@@ -127,7 +123,8 @@ int open_and_parse_elf(bin_info_table_T* bin_infos, const char* filename) {
  * @return Returns 0 if successful, an errno code if not successful
  */
 int load_alloc_segments(bin_info_table_T* bin_infos) {
-    int retval = -EIO;  // we just make an I/O-Error the default here
+    STANDARD_FUNCTION_START(-EIO);
+
     void*** allocd_segs = &bin_infos->allocd_segs;  // pointer to address of array allocd_segs
     Elf64_Addr** allocd_segs_sizes = &bin_infos->allocd_segs_sizes;  // pointer to address of array allocd_segs_size
 
@@ -202,10 +199,7 @@ int load_alloc_segments(bin_info_table_T* bin_infos) {
         if (-1 == mprotect(pa, phdr_entry.p_memsz, mmap_seg_prot)) JMP_W_ERROR("memprotect failed", ret);
     }
 
-    return 0;
-    ret:
-    if (-errno != retval) return -errno;  // return errno if it's not the same as retval
-    return retval;  // else we return the retval code
+    STANDARD_FUNCTION_RETURN;
 }
 
 /**
@@ -217,7 +211,8 @@ int load_alloc_segments(bin_info_table_T* bin_infos) {
  * @return Returns 0 if successful, an errno code if not successful
  */
 int create_initial_stack(bin_info_table_T* bin_infos, const int argc, char** argv) {
-    int retval = -EIO;
+    STANDARD_FUNCTION_START(-EIO);
+
     /* Create a new memory mapping for argc, argv, etc.
      * For that we calculate the beginning of the next page starting from the last memory mapping
      * By doing that here, we have some code duplication but this is inevitable
@@ -313,10 +308,17 @@ int create_initial_stack(bin_info_table_T* bin_infos, const int argc, char** arg
 
         bin_infos->initial_user_stack = pa;  // append it to the binary information struct for later reference/cleanup
     }
-    return 0;
-    ret:
-    if (-errno != retval) return -errno;  // return errno if it's not the same as retval
-    return retval;  // else we return the retval code
+
+    STANDARD_FUNCTION_RETURN;
+}
+
+
+/***/
+int do_relocations(bin_info_table_T* bin_infos) {
+    STANDARD_FUNCTION_START(-EIO);
+
+
+    STANDARD_FUNCTION_RETURN;
 }
 
 /**
