@@ -62,21 +62,18 @@ ssize_t memcpy_n(void* dest, const void* src);
 #define JMP_W_ERROR(ERROR_STR, JMP_LABEL) { PRINT_ERROR(ERROR_STR); goto JMP_LABEL; }
 
 
-/* This is the standard start of every function
- * It declares and initializes the variable retval to RETVAL_DEFAULT and sets errno equal to retval
+/* This is the standard start of every function - it resets errno
  */
-#define STANDARD_FUNCTION_START(RETVAL_DEFAULT) \
-    int retval = RETVAL_DEFAULT;  \
-    errno = retval;  \
+#define STANDARD_FUNCTION_START errno = 0;
 
 /* This is the standard ending of every function.
- * On success, it returns 0. Otherwise, if errno was set, errno is returned, else retval is returned
+ * On success, it returns 0. Otherwise, if errno was set, errno is returned, else RETVAL_DEFAULT is returned
  */
-#define STANDARD_FUNCTION_RETURN \
+#define STANDARD_FUNCTION_RETURN(RETVAL_DEFAULT) \
     return 0;  /* we assume if we came here everything is good */  \
     ret:  \
-    if (-errno != retval) return -errno;  /* return errno if it's not the same as retval */  \
-    return retval;  /* else we return the retval code */  \
+    if (!errno) return RETVAL_DEFAULT;  /* if errno is cleared, RETVAL_DEFAULT */  \
+    return -errno;  /* else return errno */  \
 
 
 /** Constants */

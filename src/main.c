@@ -62,7 +62,7 @@ int get_header_table(
     const Elf64_Half hdr_t_ent,
     void** hdr_t_ptr  /* we use a void* here cause we have to except multiple different pointer types */
     ) {
-    STANDARD_FUNCTION_START(-EIO);
+    STANDARD_FUNCTION_START;
 
     const char* hdr_t_type = bin_infos->elf_header->e_phoff == offset ? "program" : "section";
 
@@ -86,7 +86,7 @@ int get_header_table(
         JMP_W_CERROR("Failed to read the %s header table", ret, hdr_t_type);
 
     *hdr_t_ptr = hdr_buffer;
-    STANDARD_FUNCTION_RETURN;
+    STANDARD_FUNCTION_RETURN(-EIO);
 }
 
 /**
@@ -100,7 +100,7 @@ int get_header_table(
  */
 int open_and_parse_elf(bin_info_table_T* bin_infos, const char* filename) {
     DEBUG("Parsing elf file");
-    STANDARD_FUNCTION_START(-ENOEXEC);
+    STANDARD_FUNCTION_START;
 
     // create a stdio file obj to the elf binary
     FILE* elf_file_stream = fopen(filename, "r");
@@ -153,8 +153,8 @@ int open_and_parse_elf(bin_info_table_T* bin_infos, const char* filename) {
     // if (NULL == bin_infos->prog_header_table) JMP_W_ERROR("Failed to allocate space for the pogram-header-buffer", ret);
     // if (phdrtsize != fread(bin_infos->prog_header_table, 1, phdrtsize, elf_file_stream))
     //     JMP_W_CERROR("Failed to read the program header table", ret);
-    if (0 > (retval = get_header_table(bin_infos, elf_header->e_phoff, elf_header->e_phentsize,
-        elf_header->e_phnum, (void*)&bin_infos->prog_header_table))) {
+    if (0 > get_header_table(bin_infos, elf_header->e_phoff, elf_header->e_phentsize,
+                        elf_header->e_phnum, (void*)&bin_infos->prog_header_table)) {
         JMP_W_CERROR("Failed to load program header table", ret)
     }
 
@@ -172,13 +172,12 @@ int open_and_parse_elf(bin_info_table_T* bin_infos, const char* filename) {
     //         JMP_W_CERROR("Failed to read the program header table", ret);
     // }
 
-    if ((retval = get_header_table(bin_infos, elf_header->e_shoff, elf_header->e_shentsize,
-    elf_header->e_shnum, (void*)&bin_infos->sect_header_table))) {
+    if (0 > get_header_table(bin_infos, elf_header->e_shoff, elf_header->e_shentsize,
+                             elf_header->e_shnum, (void*)&bin_infos->sect_header_table)) {
         JMP_W_CERROR("Failed to load section header table", ret)
     }
 
-
-    STANDARD_FUNCTION_RETURN;
+    STANDARD_FUNCTION_RETURN(-ENOEXEC);
 }
 
 /**
@@ -189,7 +188,7 @@ int open_and_parse_elf(bin_info_table_T* bin_infos, const char* filename) {
  * @return Returns 0 if successful, an errno code if not successful
  */
 int load_alloc_segments(bin_info_table_T* bin_infos) {
-    STANDARD_FUNCTION_START(-EIO);
+    STANDARD_FUNCTION_START;
 
     void*** allocd_segs = &bin_infos->allocd_segs;  // pointer to address of array allocd_segs
     Elf64_Addr** allocd_segs_sizes = &bin_infos->allocd_segs_sizes;  // pointer to address of array allocd_segs_size
@@ -265,7 +264,7 @@ int load_alloc_segments(bin_info_table_T* bin_infos) {
         if (-1 == mprotect(pa, phdr_entry.p_memsz, mmap_seg_prot)) JMP_W_ERROR("memprotect failed", ret);
     }
 
-    STANDARD_FUNCTION_RETURN;
+    STANDARD_FUNCTION_RETURN(-EIO);
 }
 
 /**
@@ -277,7 +276,7 @@ int load_alloc_segments(bin_info_table_T* bin_infos) {
  * @return Returns 0 if successful, an errno code if not successful
  */
 int create_initial_stack(bin_info_table_T* bin_infos, const int argc, char** argv) {
-    STANDARD_FUNCTION_START(-EIO);
+    STANDARD_FUNCTION_START;
 
     /* Create a new memory mapping for argc, argv, etc.
      * For that we calculate the beginning of the next page starting from the last memory mapping
@@ -375,13 +374,13 @@ int create_initial_stack(bin_info_table_T* bin_infos, const int argc, char** arg
         bin_infos->initial_user_stack = pa;  // append it to the binary information struct for later reference/cleanup
     }
 
-    STANDARD_FUNCTION_RETURN;
+    STANDARD_FUNCTION_RETURN(-EIO);
 }
 
 
 /***/
 int do_relocations(bin_info_table_T* bin_infos) {
-    STANDARD_FUNCTION_START(-EIO);
+    STANDARD_FUNCTION_START;
 
     // iterate over the section header table and parse them (shdr_entry.sh_type == SHT_RELA)
     for (Elf64_Half i = 0; i<bin_infos->elf_header->e_shnum; i++) {
@@ -395,7 +394,7 @@ int do_relocations(bin_info_table_T* bin_infos) {
     bin_infos->elf_file_size = 0;
     goto ret;
 
-    STANDARD_FUNCTION_RETURN;
+    STANDARD_FUNCTION_RETURN(-EIO);
 }
 
 /**
