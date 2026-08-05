@@ -1,7 +1,7 @@
 // ToDo: Replace all fread-error prints with proper error handling (feof and ferror)
 
-// Includes
 #define _FILE_OFFSET_BITS 64
+// Includes
 #include <stdio.h>
 #include <stdlib.h>
 #include <elf.h>
@@ -16,18 +16,17 @@
 
 typedef struct bin_info_table_S {
     Elf64_Addr  entrypoint;  // this maybe zero
-    FILE* elf_fstream;
-    Elf64_Ehdr* elf_header;
-    Elf64_Phdr* prog_header_table;
+    FILE* elf_fstream;  // file stream of the ELF file
+    Elf64_Ehdr* elf_header;  // pointer to allocated memory storing the elf header
+    Elf64_Phdr* prog_header_table;  // pointer to allocated memory storing the program header table
     int allocd_segs_size;  // len of allocd_segs array
     Elf64_Addr* allocd_segs_sizes;  // len of each allocd_segs mapping
-    void* initial_user_stack;
+    void* initial_user_stack;  // points to the beginning (lowest address) of the stack
     void* initial_user_stack_sp;  // stack pointer to set for the initial user stack
     void** allocd_segs;  // array of pointer to allocated segments
     Elf64_Addr last_mapping_size;  // holds the last mapping size --> for calculating the next mapping
     Elf64_Xword page_size;  // page size specified in the elf program headers
     Elf64_Phdr* phdr_table_vaddr;  // virtual address of the process header loaded into memory  relative to the first loaded segment
-
 } bin_info_table_T;
 
 /**
@@ -108,11 +107,10 @@ int open_and_parse_elf(bin_info_table_T* bin_infos, const char* filename) {
     if (0 > fseeko(elf_file_stream, elf_header->e_phoff, SEEK_SET))
         JMP_W_ERROR("Failed to seek in file - possibly because its too large for fseeko to handle", ret);
     const Elf64_Word phdrtsize = elf_header->e_phentsize * elf_header->e_phnum;
-    Elf64_Phdr* phdrtable = calloc(1, phdrtsize);  // program header table
-    if (NULL == phdrtable) JMP_W_ERROR("Failed to allocate space for the pogram-header-buffer", ret);
+    bin_infos->prog_header_table = calloc(1, phdrtsize);  // program header table
+    if (NULL == bin_infos->prog_header_table) JMP_W_ERROR("Failed to allocate space for the pogram-header-buffer", ret);
 
-    bin_infos->prog_header_table = phdrtable;
-    if (phdrtsize != fread(phdrtable, 1, phdrtsize, elf_file_stream))
+    if (phdrtsize != fread(bin_infos->prog_header_table, 1, phdrtsize, elf_file_stream))
         JMP_W_CERROR("Failed to read the program header table", ret);
 
     return 0;  // we assume if we came here everything is good :)
