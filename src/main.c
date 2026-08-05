@@ -17,8 +17,10 @@
 typedef struct bin_info_table_S {
     Elf64_Addr  entrypoint;  // this maybe zero
     FILE* elf_fstream;  // file stream of the ELF file
+    unsigned long elf_file_size;  // size of the complete efi file
     Elf64_Ehdr* elf_header;  // pointer to allocated memory storing the elf header
     Elf64_Phdr* prog_header_table;  // pointer to allocated memory storing the program header table
+    Elf64_Shdr* sect_header_table;  // pointer to allocated memory storing the section header table
     int allocd_segs_size;  // len of allocd_segs array
     Elf64_Addr* allocd_segs_sizes;  // len of each allocd_segs mapping
     void* initial_user_stack;  // points to the beginning (lowest address) of the stack
@@ -44,6 +46,50 @@ typedef struct bin_info_table_S {
 // }
 
 /**
+ * Function for extracting a header table from the elf file given the offset, its size and the amount of entries
+ *
+ * @param bin_infos Pointer to data field for storing the return values of this function
+ * @param offset Offset in elf file where the header table entries are stored
+ * @param hdr_t_size Size of the table
+ * @param hdr_t_ent Amount of entries in the table
+ * @param hdr_t_ptr Address to pointer to location to store the allocated space for the header table
+ * @return Returns 0 if successful, an errno code if not successful
+ */
+int get_header_table(
+    bin_info_table_T* bin_infos,
+    const Elf64_Off offset,
+    const Elf64_Half hdr_t_size,
+    const Elf64_Half hdr_t_ent,
+    void** hdr_t_ptr  /* we use a void* here cause we have to except multiple different pointer types */
+    ) {
+    STANDARD_FUNCTION_START(-EIO);
+
+    const char* hdr_t_type = bin_infos->elf_header->e_phoff == offset ? "program" : "section";
+
+    // check if the header table exits
+    if (!offset) JMP_W_CERROR("%s header table size if 0", ret, hdr_t_type);
+    // check if the header table offset does point to a valid location within the file
+    if (offset > bin_infos->elf_file_size) JMP_W_CERROR("%s header table is beyond EOF", ret, hdr_t_type);
+
+    // next get the header table
+    /* for now, we just ignore the fact that if the file size is greater than a long,
+     * and simply 'throw' a raw error when the seek fails */
+    if (0 > fseeko(bin_infos->elf_fstream, offset, SEEK_SET))
+        JMP_W_ERROR("Failed to seek in file - possibly because its too large for fseeko to handle", ret);
+    const Elf64_Word phdrtsize = hdr_t_size * hdr_t_ent;
+    void* hdr_buffer = calloc(1, phdrtsize);  // header table size
+    if (NULL == hdr_buffer) {
+        PRINT_CUSTOM_ERROR("Failed to allocate space for the %s-header-table-buffer", hdr_t_type);
+        JMP_W_ERROR("Detailed allocation error", ret);
+    }
+    if (phdrtsize != fread(hdr_buffer, 1, phdrtsize, bin_infos->elf_fstream))
+        JMP_W_CERROR("Failed to read the %s header table", ret, hdr_t_type);
+
+    *hdr_t_ptr = hdr_buffer;
+    STANDARD_FUNCTION_RETURN;
+}
+
+/**
  * Function for opening and gathering information from the ELF binary, like checking its properties or
  * extracting header- and general information
  * Basically, every field is processed in the same order as they appear in the man-page --> `man elf`
@@ -61,7 +107,7 @@ int open_and_parse_elf(bin_info_table_T* bin_infos, const char* filename) {
     if (NULL == elf_file_stream) JMP_W_ERROR("Failed to open the ELF binary", ret);
     bin_infos->elf_fstream = elf_file_stream;
     fseek(elf_file_stream, 0L, SEEK_END);
-    const Elf64_Off file_size = ftell(elf_file_stream);  // implicitly cast this to an Elf64_Off type
+    bin_infos->elf_file_size = ftell(elf_file_stream);
     rewind(elf_file_stream);
 
     // get the elf file header
@@ -92,22 +138,41 @@ int open_and_parse_elf(bin_info_table_T* bin_infos, const char* filename) {
     // next get the entrypoint (as a virtual address) of the program for it to start
     bin_infos->entrypoint = elf_header->e_entry;  // this maybe zero
 
-    // check if the header exits
-    if (!elf_header->e_phoff) JMP_W_CERROR("Program header table size if 0", ret);
-    //check if the header offset does point to a valid location within the file
-    if (elf_header->e_phoff > file_size) JMP_W_CERROR("Program header table is beyond EOF", ret);
+    // // check if the program header table exits
+    // if (!elf_header->e_phoff) JMP_W_CERROR("Program header table size if 0", ret);
+    // //check if the program header table offset does point to a valid location within the file
+    // if (elf_header->e_phoff > file_size) JMP_W_CERROR("Program header table is beyond EOF", ret);
+    //
+    // // next get the program header table
+    // /* for now, we just ignore the fact that if the file size is greater than a long,
+    //  * and simply 'throw' a raw error when the seek fails */
+    // if (0 > fseeko(elf_file_stream, elf_header->e_phoff, SEEK_SET))
+    //     JMP_W_ERROR("Failed to seek in file - possibly because its too large for fseeko to handle", ret);
+    // const Elf64_Word phdrtsize = elf_header->e_phentsize * elf_header->e_phnum;
+    // bin_infos->prog_header_table = calloc(1, phdrtsize);  // program header table
+    // if (NULL == bin_infos->prog_header_table) JMP_W_ERROR("Failed to allocate space for the pogram-header-buffer", ret);
+    // if (phdrtsize != fread(bin_infos->prog_header_table, 1, phdrtsize, elf_file_stream))
+    //     JMP_W_CERROR("Failed to read the program header table", ret);
+    get_header_table(bin_infos, elf_header->e_phoff, elf_header->e_phentsize,
+        elf_header->e_phnum, (void*)&bin_infos->prog_header_table);
 
-    // next get the program header table
-    /* for now, we just ignore the fact that if the file size is greater than a long,
-     * and simply 'throw' a raw error when the seek fails */
-    if (0 > fseeko(elf_file_stream, elf_header->e_phoff, SEEK_SET))
-        JMP_W_ERROR("Failed to seek in file - possibly because its too large for fseeko to handle", ret);
-    const Elf64_Word phdrtsize = elf_header->e_phentsize * elf_header->e_phnum;
-    bin_infos->prog_header_table = calloc(1, phdrtsize);  // program header table
-    if (NULL == bin_infos->prog_header_table) JMP_W_ERROR("Failed to allocate space for the pogram-header-buffer", ret);
+    // // get the section header table if it exists
+    // if (elf_header->e_shoff) {
+    //     //check if the section header table offset does point to a valid location within the file
+    //     if (elf_header->e_shoff > file_size) JMP_W_CERROR("Section header table is beyond EOF", ret);
+    //     // seek to the location of the section header table
+    //     if (0 > fseeko(elf_file_stream, elf_header->e_shoff, SEEK_SET))
+    //         JMP_W_ERROR("Failed to seek in file - possibly because its too large for fseeko to handle", ret);
+    //     const Elf64_Word shdrtsize = elf_header->e_shentsize * elf_header->e_shnum;
+    //     bin_infos->prog_header_table = calloc(1, phdrtsize);  // program header table
+    //     if (NULL == bin_infos->prog_header_table) JMP_W_ERROR("Failed to allocate space for the pogram-header-buffer", ret);
+    //     if (phdrtsize != fread(bin_infos->prog_header_table, 1, phdrtsize, elf_file_stream))
+    //         JMP_W_CERROR("Failed to read the program header table", ret);
+    // }
 
-    if (phdrtsize != fread(bin_infos->prog_header_table, 1, phdrtsize, elf_file_stream))
-        JMP_W_CERROR("Failed to read the program header table", ret);
+    get_header_table(bin_infos, elf_header->e_shoff, elf_header->e_shentsize,
+        elf_header->e_shnum, (void*)&bin_infos->sect_header_table);
+
 
     STANDARD_FUNCTION_RETURN;
 }
@@ -314,7 +379,9 @@ int create_initial_stack(bin_info_table_T* bin_infos, const int argc, char** arg
 int do_relocations(bin_info_table_T* bin_infos) {
     STANDARD_FUNCTION_START(-EIO);
 
-
+    // do something with the variables and labels so that gcc doesn't throw errors in the meantime
+    bin_infos->elf_file_size = 0;
+    goto ret;
 
     STANDARD_FUNCTION_RETURN;
 }
