@@ -257,7 +257,7 @@ int load_alloc_segments(bin_info_table_T* bin_infos) {
         if (phdr_entry.p_filesz != fread((void*)(page_start+page_offset), 1, phdr_entry.p_filesz, bin_infos->elf_fstream))
             JMP_W_CERROR("Failed to read segment from file", ret);
         // memset doesn't return an error, so we assume that this is always successful - idk :)
-        memset(pa, 0x00, phdr_entry.p_memsz - phdr_entry.p_filesz);
+        memset((void*)((Elf64_Addr)pa+phdr_entry.p_filesz), 0x00, phdr_entry.p_memsz - phdr_entry.p_filesz);
 
         // next set the actual (correct) flags for this memory mapping
         const int mmap_seg_prot = (phdrflags & PF_X ? PROT_EXEC : 0) | (phdrflags & PF_W ? PROT_WRITE : 0) | (phdrflags & PF_R ? PROT_READ : 0);
