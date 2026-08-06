@@ -14,3 +14,9 @@ This loader is only intended for loading a simple* AMD-x86-64 EFI executable. Ma
 * @return {return-description}
 */
 ```
+<br><br>
+## Commit `6434421`
+The loader in this commit supports loading pure (and simple) nasm programs. 
+It **DOES NOT** end smoothly after the loaded process ends (process ends with SEGFAULT) and correct execution is not guaranteed nor fully tested yet!
+
+This commit purely marks a milestone for the project: finally being able to see acceptable and visual results of the loaders successful working inner core. 
