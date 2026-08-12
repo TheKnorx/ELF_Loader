@@ -28,7 +28,8 @@ typedef struct bin_info_table_S {
     void** allocd_segs;  // array of pointer to allocated segments
     Elf64_Addr last_mapping_size;  // holds the last mapping size --> for calculating the next mapping
     Elf64_Xword page_size;  // page size specified in the elf program headers
-    Elf64_Phdr* phdr_table_vaddr;  // virtual address of the process header loaded into memory  relative to the first loaded segment
+    Elf64_Phdr* phdr_table_vaddr;  // virtual address of the process header loaded into memory relative to the first loaded segment
+    Elf64_Addr process_base;  // base address of the new process at which the mapping starts
 } bin_info_table_T;
 
 /**
@@ -387,13 +388,15 @@ int do_relocations(bin_info_table_T* bin_infos) {
         const Elf64_Shdr shdr_entry = bin_infos->sect_header_table[i];  // get the next section header entry
         if (SHT_RELA != shdr_entry.sh_type) continue;  // skip all other sections
 
-        ;
-
+        Elf64_Rela* rel_t_a = (Elf64_Rela*)shdr_entry.sh_addr;  // get one relocation table entry with attend
+        for (Elf64_Half j = 0; j<shdr_entry.sh_size / shdr_entry.sh_entsize; j++) {
+            const Elf64_Rela* reloc_entry = rel_t_a+j;
+            if (R_X86_64_IRELATIVE == ELF64_R_TYPE(reloc_entry->r_info))
+            *(void**)reloc_entry->r_offset = ((void* (*) (void)) reloc_entry->r_addend)();
+            DEBUG("Did relocation to %p", *(void**)reloc_entry->r_offset)
+        }
     }
-    // do something with the variables and labels so that gcc doesn't throw errors in the meantime
-    bin_infos->elf_file_size = 0;
-    goto ret;
-
+    if (0) goto ret;
     STANDARD_FUNCTION_RETURN(-EIO);
 }
 
@@ -443,7 +446,7 @@ int main(const int argc, char **argv) {
 
     if (0 > create_initial_stack(&binary_infos, argc-1, argv+1)) JMP_W_CERROR("Failed to create initial stack", on_error);
 
-    if (0 > do_relocations(&binary_infos)) JMP_W_CERROR("Failed to do relocations", on_error);
+    // if (0 > do_relocations(&binary_infos)) JMP_W_CERROR("Failed to do relocations", on_error);
 
     fflush(nullptr);
     transfer_control((void*)binary_infos.entrypoint, binary_infos.initial_user_stack_sp);
