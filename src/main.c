@@ -1,5 +1,3 @@
-// ToDo: Replace all fread-error prints with proper error handling (feof and ferror)
-
 #define _FILE_OFFSET_BITS 64
 // Includes
 #include <stdio.h>
