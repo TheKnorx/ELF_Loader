@@ -217,16 +217,18 @@ int load_alloc_segments(bin_info_table_T* bin_infos) {
 
         // TODO: replace fd with efi file descriptor and load the segment directly from the efi file
 
-        /* TODO FINISHED: Calculate the correct page start and map from the offset
-         * page_start = vaddr - (vaddr - align)
-         * so now page_start % align = 0
+        /* Next calculate the correct page start, map it, and write the segment into the correct offset
          *
-         * Calculate the size of the mapping:
+         * Calculate the start of the page in which the next segment resides:
+         * page_start = vaddr - (vaddr - align)
+         * --> so now page_start % align = 0
+         *
+         * Calculate the offset to where the segment will be written within the page and the size of the mapping:
          * page_offset = p_vaddr - page_start
          * mapping_size = page_offset + p_memsz
          *
-         * Write data into page mapping at:
-         * page_start + page_offset
+         * Now the data of the segment can be written into the page at:
+         * *(page_start + page_offset) = segment_data
          */
 
         const Elf64_Addr page_start = phdr_entry.p_vaddr - phdr_entry.p_vaddr % bin_infos->page_size;
