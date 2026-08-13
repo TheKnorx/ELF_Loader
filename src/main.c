@@ -339,7 +339,7 @@ int create_initial_stack(bin_info_table_T* bin_infos, const int argc, char** arg
             _sp = (Elf64_Xword *) ((Elf64_Xword)_sp + string_length);  // increment stack pointer
         }
         _sp = (Elf64_Xword*)((Elf64_Xword)_sp + 16 - (Elf64_Xword)_sp % 16);  // make it aligned to 16
-        bin_infos->initial_user_stack_sp = (void*)_sp;  // let the (loaded programs) stack pointer have this value
+        bin_infos->initial_user_stack_sp = (void*)_sp;  // let the (loaded program) stack pointer have this value
         PUSH(argc, _sp);  // Append argc to the stack as a 64-bit unsigned number
         for (int i = 0; i<argc; i++) PUSH(string_table_ptrs[i], _sp);  // populate argv with the addresses to the strings
         PUSH(NULL, _sp);  // terminate argv
