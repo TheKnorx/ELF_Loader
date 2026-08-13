@@ -7,7 +7,8 @@
 
 // extern assembly functions
 extern void transfer_control(void* entry_point, void* stack_addr);
-ssize_t memcpy_n(void* dest, const void* src);
+extern void *memset_(void* s, int c, size_t n);
+extern ssize_t memcpy_n(void* dest, const void* src);
 
 
 #define NOP __asm__("NOP")  // No-Operation - assembly instruction
