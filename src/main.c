@@ -15,21 +15,20 @@
 #include "main.h"
 
 typedef struct bin_info_table_S {
-    Elf64_Addr  entrypoint;  // this maybe zero
-    FILE* elf_fstream;  // file stream of the ELF file
-    unsigned long elf_file_size;  // size of the complete efi file
-    Elf64_Ehdr* elf_header;  // pointer to allocated memory storing the elf header
+    Elf64_Addr  entrypoint;         // this maybe zero
+    FILE*       elf_fstream;        // file stream of the ELF file
+    __u_long    elf_file_size;      // size of the complete efi file
+    Elf64_Ehdr* elf_header;         // pointer to allocated memory storing the elf header
     Elf64_Phdr* prog_header_table;  // pointer to allocated memory storing the program header table
     Elf64_Shdr* sect_header_table;  // pointer to allocated memory storing the section header table
-    int allocd_segs_size;  // len of allocd_segs array
+    int         allocd_segs_len;    // len of allocd_segs array
     Elf64_Addr* allocd_segs_sizes;  // len of each allocd_segs mapping
-    void* initial_user_stack;  // points to the beginning (lowest address) of the stack
-    void* initial_user_stack_sp;  // stack pointer to set for the initial user stack
-    void** allocd_segs;  // array of pointer to allocated segments
-    Elf64_Addr last_mapping_size;  // holds the last mapping size --> for calculating the next mapping
-    Elf64_Xword page_size;  // page size specified in the elf program headers
-    Elf64_Phdr* phdr_table_vaddr;  // virtual address of the process header loaded into memory relative to the first loaded segment
-    Elf64_Addr process_base;  // base address of the new process at which the mapping starts
+    void*       initial_user_stack; // points to the beginning (lowest address) of the stack
+    void*       initial_user_stack_sp;  // stack pointer to set for the initial user stack
+    void**      allocd_segs;        // array of pointer to allocated segments
+    Elf64_Addr  last_mapping_size;  // holds the last mapping size --> for calculating the next mapping
+    Elf64_Xword page_size;          // page size specified in the elf program headers
+    Elf64_Phdr* phdr_table_vaddr;   // virtual address of the process header loaded into memory relative to the first loaded segment
 } bin_info_table_T;
 
 /**
@@ -57,7 +56,7 @@ typedef struct bin_info_table_S {
  * @return Returns 0 if successful, an errno code if not successful
  */
 int get_header_table(
-    bin_info_table_T* bin_infos,
+    const bin_info_table_T* bin_infos,
     const Elf64_Off offset,
     const Elf64_Half hdr_t_size,
     const Elf64_Half hdr_t_ent,
@@ -83,6 +82,7 @@ int get_header_table(
         PRINT_CUSTOM_ERROR("Failed to allocate space for the %s-header-table-buffer", hdr_t_type);
         JMP_W_ERROR("Detailed allocation error", ret);
     }
+    // read the header from the elf file and check, if we got all the bytes
     if (phdrtsize != fread(hdr_buffer, 1, phdrtsize, bin_infos->elf_fstream))
         JMP_W_CERROR("Failed to read the %s header table", ret, hdr_t_type);
 
@@ -136,43 +136,16 @@ int open_and_parse_elf(bin_info_table_T* bin_infos, const char* filename) {
     // check if the elf file contains the correct target instruction set architecture (64-bit / for instructions)
     if (EM_X86_64 != elf_header->e_machine) JMP_W_CERROR("EFI file has the wrong instruction set architecture", ret);
 
-    // next get the entrypoint (as a virtual address) of the program for it to start
+    // next get the entrypoint (as a virtual address) of the program
     bin_infos->entrypoint = elf_header->e_entry;  // this maybe zero
 
-    // // check if the program header table exits
-    // if (!elf_header->e_phoff) JMP_W_CERROR("Program header table size if 0", ret);
-    // //check if the program header table offset does point to a valid location within the file
-    // if (elf_header->e_phoff > file_size) JMP_W_CERROR("Program header table is beyond EOF", ret);
-    //
-    // // next get the program header table
-    // /* for now, we just ignore the fact that if the file size is greater than a long,
-    //  * and simply 'throw' a raw error when the seek fails */
-    // if (0 > fseeko(elf_file_stream, elf_header->e_phoff, SEEK_SET))
-    //     JMP_W_ERROR("Failed to seek in file - possibly because its too large for fseeko to handle", ret);
-    // const Elf64_Word phdrtsize = elf_header->e_phentsize * elf_header->e_phnum;
-    // bin_infos->prog_header_table = calloc(1, phdrtsize);  // program header table
-    // if (NULL == bin_infos->prog_header_table) JMP_W_ERROR("Failed to allocate space for the pogram-header-buffer", ret);
-    // if (phdrtsize != fread(bin_infos->prog_header_table, 1, phdrtsize, elf_file_stream))
-    //     JMP_W_CERROR("Failed to read the program header table", ret);
+    // next get the program header table if it exists
     if (0 > get_header_table(bin_infos, elf_header->e_phoff, elf_header->e_phentsize,
                         elf_header->e_phnum, (void*)&bin_infos->prog_header_table)) {
         JMP_W_CERROR("Failed to load program header table", ret)
     }
 
-    // // get the section header table if it exists
-    // if (elf_header->e_shoff) {
-    //     //check if the section header table offset does point to a valid location within the file
-    //     if (elf_header->e_shoff > file_size) JMP_W_CERROR("Section header table is beyond EOF", ret);
-    //     // seek to the location of the section header table
-    //     if (0 > fseeko(elf_file_stream, elf_header->e_shoff, SEEK_SET))
-    //         JMP_W_ERROR("Failed to seek in file - possibly because its too large for fseeko to handle", ret);
-    //     const Elf64_Word shdrtsize = elf_header->e_shentsize * elf_header->e_shnum;
-    //     bin_infos->prog_header_table = calloc(1, phdrtsize);  // program header table
-    //     if (NULL == bin_infos->prog_header_table) JMP_W_ERROR("Failed to allocate space for the pogram-header-buffer", ret);
-    //     if (phdrtsize != fread(bin_infos->prog_header_table, 1, phdrtsize, elf_file_stream))
-    //         JMP_W_CERROR("Failed to read the program header table", ret);
-    // }
-
+    // get the section header table if it exists
     if (0 > get_header_table(bin_infos, elf_header->e_shoff, elf_header->e_shentsize,
                              elf_header->e_shnum, (void*)&bin_infos->sect_header_table)) {
         JMP_W_CERROR("Failed to load section header table", ret)
@@ -209,26 +182,21 @@ int realloc_array(void** array, const int* array_size, const int type_s) {
 int load_alloc_segments(bin_info_table_T* bin_infos) {
     STANDARD_FUNCTION_START;
 
-    void*** allocd_segs = &bin_infos->allocd_segs;  // pointer to address of array allocd_segs
-    Elf64_Addr** allocd_segs_sizes = &bin_infos->allocd_segs_sizes;  // pointer to address of array allocd_segs_size
-
     // iterate over the program header table and load the segments we need --> p_type=PT_LOAD
     for (Elf64_Half i = 0; i<bin_infos->elf_header->e_phnum; i++) {
-        Elf64_Phdr phdr_entry = bin_infos->prog_header_table[i];  // get the next program header entry
+        const Elf64_Phdr phdr_entry = bin_infos->prog_header_table[i];  // get the next program header entry
         if (PT_LOAD != phdr_entry.p_type && PT_TLS != phdr_entry.p_type) continue;  // skip all other segments
         if (!bin_infos->page_size && 0 != phdr_entry.p_align) bin_infos->page_size = phdr_entry.p_align;
         if (!bin_infos->phdr_table_vaddr) bin_infos->phdr_table_vaddr = (Elf64_Phdr*)(phdr_entry.p_vaddr + bin_infos->elf_header->e_phoff);
 
         // if we found a loadable segment, allocate memory for the pointer to store it into the array
-        bin_infos->allocd_segs_size++;  // increase the length index
-        // (re)alloc the segment-mapping-address array
-        void* new_ptr = realloc(*allocd_segs, sizeof(void*)*bin_infos->allocd_segs_size);
-        if (NULL == new_ptr) JMP_W_CERROR("Realloc failed on segment-mapping-address array", ret);
-        *allocd_segs = new_ptr;  // assign the new space to the array
+        bin_infos->allocd_segs_len++;  // increase the length index
+        if (0 > realloc_array((void**)&bin_infos->allocd_segs, &bin_infos->allocd_segs_len, POINTER_SIZE))
+            JMP_W_CERROR("Realloc failed on segment-mapping-address array", ret)
+
         // also (re)alloc the segment-mapping-sizes array
-        new_ptr = realloc(*allocd_segs_sizes, sizeof(void*)*bin_infos->allocd_segs_size);
-        if (NULL == new_ptr) JMP_W_CERROR("Realloc failed segment-mapping-sizes array", ret);
-        *allocd_segs_sizes = new_ptr;  // assign the new space to the array
+        if (0 > realloc_array((void**)&bin_infos->allocd_segs_sizes, &bin_infos->allocd_segs_len, sizeof(Elf64_Addr)))
+            JMP_W_CERROR("Realloc failed on segment-mapping-sizes array", ret)
 
         // next allocate the actual segment with the correct address
         const Elf64_Word phdrflags = phdr_entry.p_flags;
@@ -260,7 +228,7 @@ int load_alloc_segments(bin_info_table_T* bin_infos) {
             PRINT_ERROR("Error from mmap");
             goto ret;
         }
-        *(*allocd_segs+bin_infos->allocd_segs_size-1) = pa;  // store pointer for later usage...
+        bin_infos->allocd_segs[bin_infos->allocd_segs_len-1] = pa;
         if (pa != (void*)page_start)
             JMP_W_CERROR("Failed to allocate memory for segment at correct address. \n"
                          "Provided addr by mmap: %p vs. calculated addr from hdr: %p", ret, pa, (void*)page_start)
@@ -303,7 +271,7 @@ int create_initial_stack(bin_info_table_T* bin_infos, const int argc, char** arg
      * We assume that the program header entry variable (phdr_entry) is already initialized
      * We also assume that the address of the last mapped section is already page aligned (- it has to be)
      */
-    Elf64_Addr new_page_start = (Elf64_Addr) bin_infos->allocd_segs[bin_infos->allocd_segs_size-1];
+    Elf64_Addr new_page_start = (Elf64_Addr) bin_infos->allocd_segs[bin_infos->allocd_segs_len-1];
     new_page_start = new_page_start + bin_infos->last_mapping_size;  // add to the previous addr the mapping size
     new_page_start = new_page_start + (bin_infos->page_size - new_page_start % bin_infos->page_size);  // make it page aligned
     void* const pa = mmap((void*)new_page_start, DEFAULT_STACK_SIZE, PROT_WRITE | PROT_READ,
@@ -336,7 +304,8 @@ int create_initial_stack(bin_info_table_T* bin_infos, const int argc, char** arg
     */
     {/* We need this block to have the variable-length-array out of scope for the goto's;
         Otherwise gcc gives us an error, cause apparently its illegal to have a goto jmp into the scope of a VLA */
-        Elf64_Xword* _sp = (Elf64_Xword*)((Elf64_Xword)pa+1024*1024*7);  // define kind of a stack pointer, 7 MiB into stack memory
+        // define kind of a stack pointer (of type XWord cause it points to raw data), 7 MiB into stack memory
+        Elf64_Xword* _sp = (Elf64_Xword*)((Elf64_Xword)pa+1024*1024*7);
 
         Elf64_Addr* random_bytes = _sp;
         // create 16 random bytes - for now this is 'random' enough
@@ -355,7 +324,7 @@ int create_initial_stack(bin_info_table_T* bin_infos, const int argc, char** arg
             _sp = (Elf64_Xword *) ((Elf64_Xword)_sp + string_length);  // increment stack pointer
         }
         _sp = (Elf64_Xword*)((Elf64_Xword)_sp + 16 - (Elf64_Xword)_sp % 16);  // make it aligned to 16
-        bin_infos->initial_user_stack_sp = (void*)_sp;  // let the stack begin herer
+        bin_infos->initial_user_stack_sp = (void*)_sp;  // let the (loaded programs) stack pointer have this value
         PUSH(argc, _sp);  // Append argc to the stack as a 64-bit unsigned number
         for (int i = 0; i<argc; i++) PUSH(string_table_ptrs[i], _sp);  // populate argv with the addresses to the strings
         PUSH(NULL, _sp);  // terminate argv
@@ -431,7 +400,7 @@ void cleanup(bin_info_table_T* bin_infos) {
     free(bin_infos->elf_header);
     bin_infos->elf_header = nullptr;
     if (nullptr == bin_infos->allocd_segs) goto allocd_segs_free_end;
-    for (int i = 0; i<bin_infos->allocd_segs_size; i++) {
+    for (int i = 0; i<bin_infos->allocd_segs_len; i++) {
         if (MAP_FAILED != bin_infos->allocd_segs[i]) munmap(bin_infos->allocd_segs[i], bin_infos->allocd_segs_sizes[i]);
     }
     free(bin_infos->allocd_segs);
