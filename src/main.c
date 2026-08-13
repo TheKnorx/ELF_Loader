@@ -32,8 +32,8 @@ typedef struct bin_info_table_S {
 
 /**
  * Function for seeking with offsets of greater length than `long', namely up to an offsets of type `Elf64_Off'
- * @param stream file stream to seek in
- * @param offset offset to seek within the file
+ * @param stream File stream to seek in
+ * @param offset Offset to seek within the file
  * @param whence Position to begin seeking in the file
  */
 int safe_fseeko(FILE *stream, Elf64_Off offset, const int whence) {
