@@ -86,10 +86,9 @@ int get_header_table(
     if (offset > bin_infos->elf_file_size) JMP_W_CERROR("%s header table is beyond EOF", ret, hdr_t_type);
 
     // next get the header table
-    /* for now, we just ignore the fact that if the file size is greater than a long,
-     * and simply 'throw' a raw error when the seek fails */
-    if (0 > fseeko(bin_infos->elf_fstream, offset, SEEK_SET))
-        JMP_W_ERROR("Failed to seek in file - possibly because its too large for fseeko to handle", ret);
+    if (0 > safe_fseeko(bin_infos->elf_fstream, offset, SEEK_SET))
+        JMP_W_CERROR("Failed to seek in file", ret);
+
     const Elf64_Word phdrtsize = hdr_t_size * hdr_t_ent;
     void* hdr_buffer = calloc(1, phdrtsize);  // header table size
     if (NULL == hdr_buffer) {
@@ -252,9 +251,8 @@ int load_alloc_segments(bin_info_table_T* bin_infos) {
         fflush(stdout);
 
         // read in the segment data from the elf file and write it into the allocated memory of the segment
-        // also here, we ignore the fact that p_offset could be too large for fseek
-        if (0 > fseeko(bin_infos->elf_fstream, phdr_entry.p_offset, SEEK_SET))
-            JMP_W_ERROR("Failed to seek in file - possibly because its too large for fseeko to handle", ret);
+        if (0 > safe_fseeko(bin_infos->elf_fstream, phdr_entry.p_offset, SEEK_SET))
+            JMP_W_CERROR("Failed to seek in file", ret);
         if (phdr_entry.p_filesz != fread((void*)(page_start+page_offset), 1, phdr_entry.p_filesz, bin_infos->elf_fstream))
             JMP_W_CERROR("Failed to read segment from file", ret);
         // memset doesn't return an error, so we assume that this is always successful - idk :)
