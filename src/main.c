@@ -182,6 +182,24 @@ int open_and_parse_elf(bin_info_table_T* bin_infos, const char* filename) {
 }
 
 /**
+ * Function for allocating or resizing an array by @param type_s * @param array_size
+ * @param array Pointer to array to allocate/resize
+ * @param array_size Current size of the array
+ * @param type_s Type that gets stored in the array, so we can calculate the new size
+ * @return Returns 0 if successful, en errno code if not successful
+ */
+int realloc_array(void** array, const int* array_size, const int type_s) {
+    STANDARD_FUNCTION_START;
+
+    void* new_ptr = realloc(*array, type_s * *array_size);  // (re)alloc the array
+    if (NULL == new_ptr) JMP_W_ERROR("Realloc failed", ret);    // check whether realloc failed or not
+    *array = new_ptr;  // assign the new space to the array
+
+    STANDARD_FUNCTION_RETURN(-ENOMEM)
+}
+
+
+/**
  * Function for loading the segment headers from the program header table into memory
  * and mapping all the relevant segments into the virtual address space of the new process
  *
