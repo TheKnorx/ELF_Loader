@@ -1,4 +1,5 @@
 section .bss
+    ENTRY_POINT_ADDR:   resq 1  ; reservate 1 quad word of space for the entry pointer address
 section .data
 section .text
 
@@ -62,9 +63,34 @@ global transfer_control
 transfer_control:
     ENTER
 
-    mov     rsp, rsi; set stack pointer to point to stack begin
-    ; mov     rbp, rsi; set base pointer to point to stack begin
-    jmp     rdi     ;  jmp to _start of ELF binary
+    mov     rsp, rsi    ; set stack pointer to point to stack begin
+    mov     qword [rel ENTRY_POINT_ADDR], rdi   ; preserve the address of the entry point
+
+    ; zero out all segment registers
+    xor     ax, ax
+    mov     ds, ax
+    mov     es, ax
+    mov     fs, ax
+    mov     gs, ax
+
+    ; zero out all general purpose registers
+    xor     rax, rax
+    xor     rbx, rbx
+    xor     rcx, rcx
+    xor     rdx, rdx
+    xor     rbp, rbp
+    xor     rsi, rsi
+    xor     rdi, rdi
+    xor     r8, r8
+    xor     r9, r9
+    xor     r10, r10
+    xor     r11, r11
+    xor     r12, r12
+    xor     r13, r13
+    xor     r14, r14
+    xor     r15, r15
+
+    jmp     [rel ENTRY_POINT_ADDR]  ; jmp to _start of ELF binary
 
     LEAVE
 

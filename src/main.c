@@ -322,57 +322,62 @@ int create_initial_stack(bin_info_table_T* bin_infos, const int argc, char** arg
         // define kind of a stack pointer (of type XWord cause it points to raw data), 7 MiB into stack memory
         Elf64_Xword* _sp = (Elf64_Xword*)((Elf64_Xword)pa+1024*1024*7);
 
-        Elf64_Addr* random_bytes = _sp;
-        // create 16 random bytes - for now this is 'random' enough
-        PUSH("1", _sp);  // 8 bytes
-        PUSH("2", _sp);  // 8 bytes
-
-        // First build the argv string table so that the size of the strings don't matter when building the rest of the stack
-        Elf64_Addr* string_table_ptrs[argc-1];
-        // const int omitted_elements = 4;  // namely the NULL after argv, envp and the auxv pair
-        ssize_t string_length = 0;
-        for (int i = 0; i<argc; i++) {
-            // Elf64_Addr* string_address = (Elf64_Addr*)((Elf64_Xword)_sp + (argc - i + omitted_elements) * POINTER_SIZE + string_length);
-            string_length = memcpy_n(_sp, argv[i]);  // copy the string from argv[i] to the stack
-            //PUSH(string_address, _sp);  // 'push' the addr to the copied string onto stack
-            string_table_ptrs[i] = _sp;
-            _sp = (Elf64_Xword *) ((Elf64_Xword)_sp + string_length);  // increment stack pointer
-        }
-        _sp = (Elf64_Xword*)((Elf64_Xword)_sp + 16 - (Elf64_Xword)_sp % 16);  // make it aligned to 16
+        ALIGN_SP(_sp);  // make it aligned to 16
         bin_infos->initial_user_stack_sp = (void*)_sp;  // let the (loaded programs) stack pointer have this value
         PUSH(argc, _sp);  // Append argc to the stack as a 64-bit unsigned number
-        for (int i = 0; i<argc; i++) PUSH(string_table_ptrs[i], _sp);  // populate argv with the addresses to the strings
+        Elf64_Addr* _sp_argv = _sp;  // we will populate argv later
+        _sp = (Elf64_Addr*)((Elf64_Addr)_sp + POINTER_SIZE * argc);  // make room for the string pointers of argv
         PUSH(NULL, _sp);  // terminate argv
         PUSH(NULL, _sp);  // terminate envp
 
         // push all the needed auxiliary vectors
         Elf64_auxv_t* auxv = (Elf64_auxv_t*)_sp;  // define an array for auxv
-        int i = 0;
-        auxv[i++] = (Elf64_auxv_t){.a_type = AT_PHDR, .a_un = {(uint64_t)bin_infos->phdr_table_vaddr}};
-        auxv[i++] = (Elf64_auxv_t){.a_type = AT_PHENT, .a_un = {bin_infos->elf_header->e_phentsize}};
-        auxv[i++] = (Elf64_auxv_t){.a_type = AT_PHNUM, .a_un = {bin_infos->elf_header->e_phnum}};
-        auxv[i++] = (Elf64_auxv_t){.a_type = AT_PAGESZ, .a_un = {bin_infos->page_size}};
-        auxv[i++] = (Elf64_auxv_t){.a_type = AT_BASE, .a_un = {0x00}};  // we dont have an interpreter
-        auxv[i++] = (Elf64_auxv_t){.a_type = AT_FLAGS, .a_un = {0x00}};
-        auxv[i++] = (Elf64_auxv_t){.a_type = AT_ENTRY, .a_un = {bin_infos->elf_header->e_entry}};
-        auxv[i++] = (Elf64_auxv_t){.a_type = AT_UID, .a_un = {getuid()}};
-        auxv[i++] = (Elf64_auxv_t){.a_type = AT_EUID, .a_un = {geteuid()}};
-        auxv[i++] = (Elf64_auxv_t){.a_type = AT_GID, .a_un = {getgid()}};
-        auxv[i++] = (Elf64_auxv_t){.a_type = AT_EGID, .a_un = {getegid()}};
-        auxv[i++] = (Elf64_auxv_t){.a_type = AT_CLKTCK, .a_un = {sysconf(_SC_CLK_TCK)}};
-        auxv[i++] = (Elf64_auxv_t){.a_type = AT_PLATFORM, .a_un = {getauxval(AT_PLATFORM)}};
-        auxv[i++] = (Elf64_auxv_t){.a_type = AT_HWCAP, .a_un = {getauxval(AT_HWCAP)}};
-        auxv[i++] = (Elf64_auxv_t){.a_type = AT_HWCAP2, .a_un = {getauxval(AT_HWCAP2)}};
-        auxv[i++] = (Elf64_auxv_t){.a_type = AT_HWCAP3, .a_un = {getauxval(AT_HWCAP3)}};
-        auxv[i++] = (Elf64_auxv_t){.a_type = AT_HWCAP4, .a_un = {getauxval(AT_HWCAP4)}};
-        auxv[i++] = (Elf64_auxv_t){.a_type = AT_SECURE, .a_un = {0}};
-        auxv[i++] = (Elf64_auxv_t){.a_type = AT_RANDOM, .a_un = {(uint64_t)random_bytes}};
-        auxv[i++] = (Elf64_auxv_t){.a_type = AT_RSEQ_FEATURE_SIZE, .a_un = {getauxval(AT_RSEQ_FEATURE_SIZE)}};
-        auxv[i++] = (Elf64_auxv_t){.a_type = AT_RSEQ_ALIGN, .a_un = {getauxval(AT_RSEQ_ALIGN)}};
-        auxv[i++] = (Elf64_auxv_t){.a_type = AT_EXECFN, .a_un = {(uint64_t)string_table_ptrs[0]}};  // ptr to argv[0]
-        auxv[i++] = (Elf64_auxv_t){.a_type = AT_SYSINFO_EHDR, .a_un = {getauxval(AT_SYSINFO_EHDR)}};
-        auxv[i++] = (Elf64_auxv_t){.a_type = AT_MINSIGSTKSZ, .a_un = {getauxval(AT_MINSIGSTKSZ)}};
-        auxv[i] = (Elf64_auxv_t){.a_type = AT_NULL, .a_un = {0x00}};  // end of auxiliary vector
+        int auxv_index = 0;
+        auxv[auxv_index++] = (Elf64_auxv_t){.a_type = AT_PHDR, .a_un = {(uint64_t)bin_infos->phdr_table_vaddr}};
+        auxv[auxv_index++] = (Elf64_auxv_t){.a_type = AT_PHENT, .a_un = {bin_infos->elf_header->e_phentsize}};
+        auxv[auxv_index++] = (Elf64_auxv_t){.a_type = AT_PHNUM, .a_un = {bin_infos->elf_header->e_phnum}};
+        auxv[auxv_index++] = (Elf64_auxv_t){.a_type = AT_PAGESZ, .a_un = {bin_infos->page_size}};
+        auxv[auxv_index++] = (Elf64_auxv_t){.a_type = AT_BASE, .a_un = {0x00}};  // we dont have an interpreter
+        auxv[auxv_index++] = (Elf64_auxv_t){.a_type = AT_FLAGS, .a_un = {0x00}};
+        auxv[auxv_index++] = (Elf64_auxv_t){.a_type = AT_ENTRY, .a_un = {bin_infos->elf_header->e_entry}};
+        auxv[auxv_index++] = (Elf64_auxv_t){.a_type = AT_UID, .a_un = {getuid()}};
+        auxv[auxv_index++] = (Elf64_auxv_t){.a_type = AT_EUID, .a_un = {geteuid()}};
+        auxv[auxv_index++] = (Elf64_auxv_t){.a_type = AT_GID, .a_un = {getgid()}};
+        auxv[auxv_index++] = (Elf64_auxv_t){.a_type = AT_EGID, .a_un = {getegid()}};
+        auxv[auxv_index++] = (Elf64_auxv_t){.a_type = AT_CLKTCK, .a_un = {sysconf(_SC_CLK_TCK)}};
+        auxv[auxv_index++] = (Elf64_auxv_t){.a_type = AT_PLATFORM, .a_un = {getauxval(AT_PLATFORM)}};
+        auxv[auxv_index++] = (Elf64_auxv_t){.a_type = AT_HWCAP, .a_un = {getauxval(AT_HWCAP)}};
+        auxv[auxv_index++] = (Elf64_auxv_t){.a_type = AT_HWCAP2, .a_un = {getauxval(AT_HWCAP2)}};
+        auxv[auxv_index++] = (Elf64_auxv_t){.a_type = AT_HWCAP3, .a_un = {getauxval(AT_HWCAP3)}};
+        auxv[auxv_index++] = (Elf64_auxv_t){.a_type = AT_HWCAP4, .a_un = {getauxval(AT_HWCAP4)}};
+        auxv[auxv_index++] = (Elf64_auxv_t){.a_type = AT_SECURE, .a_un = {0}};
+        const int auxv_rand_bytes_i = auxv_index;  // save the index to AT_RANDOM to set it later
+        auxv[auxv_index++] = (Elf64_auxv_t){.a_type = AT_RANDOM, .a_un = {(uint64_t)0x00}};  // we fill set this later
+        auxv[auxv_index++] = (Elf64_auxv_t){.a_type = AT_RSEQ_FEATURE_SIZE, .a_un = {getauxval(AT_RSEQ_FEATURE_SIZE)}};
+        auxv[auxv_index++] = (Elf64_auxv_t){.a_type = AT_RSEQ_ALIGN, .a_un = {getauxval(AT_RSEQ_ALIGN)}};
+        auxv[auxv_index++] = (Elf64_auxv_t){.a_type = AT_EXECFN, .a_un = {(uint64_t)_sp_argv}};  // ptr to argv[0]
+        auxv[auxv_index++] = (Elf64_auxv_t){.a_type = AT_SYSINFO_EHDR, .a_un = {getauxval(AT_SYSINFO_EHDR)}};
+        auxv[auxv_index++] = (Elf64_auxv_t){.a_type = AT_MINSIGSTKSZ, .a_un = {getauxval(AT_MINSIGSTKSZ)}};
+        auxv[auxv_index] = (Elf64_auxv_t){.a_type = AT_NULL, .a_un = {0x00}};  // end of auxiliary vector
+
+        _sp = (Elf64_Addr*)((Elf64_Addr)_sp + sizeof(Elf64_auxv_t) * (auxv_index+1));  // move _sp to the end of auxv
+        ALIGN_SP(_sp);  // make it aligned to 16
+
+        // Build the argv string table
+        ssize_t string_length = 0;
+        for (int i = 0; i<argc; i++) {
+            string_length = memcpy_n(_sp, argv[i]);  // copy the string from argv[i] to the stack
+            PUSH(_sp, _sp_argv);  // populate argv with the addresses to the strings
+            _sp = (Elf64_Xword *) ((Elf64_Xword)_sp + string_length);  // increment stack pointer
+        }
+
+        // push the random bytes for gcc's TLS seeding onto stack
+        ALIGN_SP(_sp);
+        Elf64_Addr* random_bytes = _sp;
+        // create 16 random bytes - for now this is 'random' enough
+        PUSH("1", _sp);  // 8 bytes
+        PUSH("2", _sp);  // 8 bytes
+        auxv[auxv_rand_bytes_i] = (Elf64_auxv_t){.a_type = AT_RANDOM, .a_un = {(uint64_t)random_bytes}};
 
         bin_infos->initial_user_stack = pa;  // append it to the binary information struct for later reference/cleanup
     }
