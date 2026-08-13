@@ -39,10 +39,6 @@ memcpy_n:
     mov     rax, rdx    ; move r9/s[.n] into rax for returning
     ret
 
-; function for creating the initial user stack
-; we expect the following parameters in the following order: stack_addr, argc, argv,
-create_initial_user_stack:
-
 
 ; this function follows the ABI convention
 ; we expect the following parameters in the following order: entry_point, address to set rsp to
