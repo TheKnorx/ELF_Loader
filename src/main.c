@@ -11,6 +11,7 @@
 #include <sys/mman.h>
 #include <unistd.h>
 #include <sys/auxv.h>
+#include <limits.h>
 
 #include "main.h"
 
@@ -33,17 +34,31 @@ typedef struct bin_info_table_S {
 
 /**
  * Function for seeking with offsets of greater length than `long', namely up to an offsets of type `Elf64_Off'
- * @param fp file stream pointer to seek in
+ * @param stream file stream to seek in
  * @param offset offset to seek within the file
+ * @param whence Position to begin seeking in the file
  */
-// void safe_fseek(FILE *fp, const Elf64_Off offset) {
-//     if (offset > LONG_MAX) {
-//         fseek(fp, LONG_MAX, SEEK_SET);
-//         fseek(fp, (long)(offset - LONG_MAX), SEEK_CUR);
-//     } else {
-//         fseek(fp, (long)offset, SEEK_SET);
-//     }
-// }
+int safe_fseeko(FILE *stream, Elf64_Off offset, const int whence) {
+    STANDARD_FUNCTION_START
+
+    // First have this fseeko block so we can use the whence as a starting point
+    if (offset > LONG_MAX) {
+        if (0 > fseeko(stream, LONG_MAX, whence)) JMP_W_ERROR("Initial fseeko failed", ret);
+        offset -= LONG_MAX;
+    }
+
+    // Next, while the offset is still greater than LONG_MAX, seek with LONG_MAX until its less or equal than LONG_MAX
+    while (offset > LONG_MAX) {
+        if (0 > fseeko(stream, LONG_MAX, SEEK_CUR)) JMP_W_ERROR("Iterative fseeko failed", ret);
+        offset -= LONG_MAX;
+    }
+
+    // Finally, the offset the less or equal to LONG_MAX so we seek with the offset that is left (cast to a long)
+    if (0 > fseeko(stream, (long)offset, SEEK_CUR)) JMP_W_ERROR("Closing fseeko failed", ret);
+
+    // Just return -errno in any case as we don't have any other instructions that would need a retval themselves
+    STANDARD_FUNCTION_RETURN(-errno);
+}
 
 /**
  * Function for extracting the program- and section- header table from the elf file given the offset, its size and the amount of entries
