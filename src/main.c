@@ -120,7 +120,8 @@ int open_and_parse_elf(bin_info_table_T* bin_infos, const char* filename) {
     FILE* elf_file_stream = fopen(filename, "r");
     if (NULL == elf_file_stream) JMP_W_ERROR("Failed to open the ELF binary", ret);
     bin_infos->elf_fstream = elf_file_stream;
-    fseek(elf_file_stream, 0L, SEEK_END);
+    if (0 > safe_fseeko(elf_file_stream, 0L, SEEK_END))
+        JMP_W_CERROR("Failed to seek in file", ret);
     bin_infos->elf_file_size = ftell(elf_file_stream);
     rewind(elf_file_stream);
 
