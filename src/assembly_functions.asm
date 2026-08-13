@@ -39,6 +39,21 @@ memcpy_n:
     mov     rax, rdx    ; move r9/s[.n] into rax for returning
     ret
 
+; This function is just a custom memset implementation in assembly - it works just like memset
+; signature:    void *memset(void s[n], int c, size_t n);
+global memset_
+memset_:
+    ; no prolog or epilog needed
+
+    ; rdi - parameter s[n] - rdi already contains destination memory address
+    mov     r9, rdi     ; save s[n] into r9 for later use
+    mov     rcx, rdx    ; move parameter n into counter register
+    mov     al, sil     ; move parameter c into al
+    cld                 ; clear direction flag so that we overwrite upwards from the base memory address
+    rep stosb           ; overwrite whole allocated memory with char in al
+
+    mov     rax, r9     ; move r9/s[n] into rax for returning
+    ret
 
 ; this function follows the ABI convention
 ; we expect the following parameters in the following order: entry_point, address to set rsp to
