@@ -280,7 +280,7 @@ int load_alloc_segments(bin_info_table_T* bin_infos) {
 int create_initial_stack(bin_info_table_T* bin_infos, const int argc, char** argv) {
     STANDARD_FUNCTION_START;
 
-    /* Create a new memory mapping for argc, argv, etc.
+    /* Create a new memory mapping for the stack, including argc, argv, etc.
      * For that we calculate the beginning of the next page starting from the last memory mapping
      * By doing that here, we have some code duplication but this is inevitable
      * We assume that the program header entry variable (phdr_entry) is already initialized
