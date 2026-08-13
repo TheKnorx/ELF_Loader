@@ -53,7 +53,7 @@ extern ssize_t memcpy_n(void* dest, const void* src);
 /* Push a value VAL onto the stack, pointed to by the stack pointer SP and increment SP by 8-Bytes!
  * SP moves *downwards*!! - this macro shall not be used for traditional stack pushing!
  * All pushed values will be cast to 8-Bytes values */
-#define PUSH(VAL, SP) {*_sp = (Elf64_Xword)VAL; SP = (Elf64_Xword*)((Elf64_Xword)SP + POINTER_SIZE);}
+#define PUSH(VAL, SP) {*SP = (Elf64_Xword)VAL; SP = (Elf64_Xword*)((Elf64_Xword)SP + POINTER_SIZE);}
 
 // For 'converting' a macro tag to a string - e.g. for debugging, etc...
 #define M_TO_STR(M) #M
