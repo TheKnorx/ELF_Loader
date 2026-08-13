@@ -36,23 +36,24 @@ typedef struct bin_info_table_S {
  * @param offset Offset to seek within the file
  * @param whence Position to begin seeking in the file
  */
-int safe_fseeko(FILE *stream, Elf64_Off offset, const int whence) {
+int safe_fseeko(FILE *stream, Elf64_Off offset, int whence) {
     STANDARD_FUNCTION_START
 
     // First have this fseeko block so we can use the whence as a starting point
     if (offset > LONG_MAX) {
         if (0 > fseeko(stream, LONG_MAX, whence)) JMP_W_ERROR("Initial fseeko failed", ret);
         offset -= LONG_MAX;
+        whence = SEEK_CUR;
     }
 
     // Next, while the offset is still greater than LONG_MAX, seek with LONG_MAX until its less or equal than LONG_MAX
     while (offset > LONG_MAX) {
-        if (0 > fseeko(stream, LONG_MAX, SEEK_CUR)) JMP_W_ERROR("Iterative fseeko failed", ret);
+        if (0 > fseeko(stream, LONG_MAX, whence)) JMP_W_ERROR("Iterative fseeko failed", ret);
         offset -= LONG_MAX;
     }
 
     // Finally, the offset the less or equal to LONG_MAX so we seek with the offset that is left (cast to a long)
-    if (0 > fseeko(stream, (long)offset, SEEK_CUR)) JMP_W_ERROR("Closing fseeko failed", ret);
+    if (0 > fseeko(stream, (long)offset, whence)) JMP_W_ERROR("Closing fseeko failed", ret);
 
     // Just return -errno in any case as we don't have any other instructions that would need a retval themselves
     STANDARD_FUNCTION_RETURN(-errno);
