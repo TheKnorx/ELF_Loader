@@ -199,9 +199,29 @@ int load_alloc_segments(bin_info_table_T* bin_infos) {
     // iterate over the program header table and load the segments we need --> p_type=PT_LOAD
     for (Elf64_Half i = 0; i<bin_infos->elf_header->e_phnum; i++) {
         const Elf64_Phdr phdr_entry = bin_infos->prog_header_table[i];  // get the next program header entry
-        if (PT_LOAD != phdr_entry.p_type && PT_TLS != phdr_entry.p_type) continue;  // skip all other segments
+
+        /* When calculating the virtual address of the PHT, there is also the possibility for the PHT to
+         * be described by a PHDR entry. In that case, the vaddr of the PHT is the vaddr of the PHDR entry. */
+        if (PT_PHDR == phdr_entry.p_type &&
+            phdr_entry.p_filesz == bin_infos->elf_header->e_phnum * bin_infos->elf_header->e_phentsize) {
+            bin_infos->phdr_table_vaddr = phdr_entry.p_vaddr;
+            continue;
+        }
+
+        if (PT_LOAD != phdr_entry.p_type) continue;  // skip all other segments
         if (!bin_infos->page_size && 0 != phdr_entry.p_align) bin_infos->page_size = phdr_entry.p_align;
-        if (!bin_infos->phdr_table_vaddr) bin_infos->phdr_table_vaddr = (Elf64_Phdr*)(phdr_entry.p_vaddr + bin_infos->elf_header->e_phoff);
+
+        /* Calculate the phdr-tables's (PHT) virtual address if there is no PHDR entry to describe it:
+         * To do that we have to check if the virtual offset of the PHT does include the file offset of the PHT.
+         * At the same time, the file offset of the PHT has to be within the memory of the segment the currently
+         * loaded program header entry is pointing to.
+         * Finally, the vaddr of the PHT is calculated by adding the difference between the file offset and the
+         * virtual offset to the vaddr of the segment.
+         */
+        if (phdr_entry.p_offset <= bin_infos->elf_header->e_phoff &&
+            bin_infos->elf_header->e_phoff < phdr_entry.p_offset + phdr_entry.p_filesz) {
+            bin_infos->phdr_table_vaddr = phdr_entry.p_vaddr + (bin_infos->elf_header->e_phoff - phdr_entry.p_offset);
+        }
 
         // if we found a loadable segment, allocate memory for the pointer to store it into the array
         bin_infos->allocd_segs_len++;  // increase the length index
