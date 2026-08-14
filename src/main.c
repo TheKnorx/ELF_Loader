@@ -27,7 +27,7 @@ typedef struct bin_info_table_S {
     void**      allocd_segs;        // array of pointer to allocated segments
     Elf64_Addr  last_mapping_size;  // holds the last mapping size --> for calculating the next mapping
     Elf64_Xword page_size;          // page size specified in the elf program headers
-    Elf64_Phdr* phdr_table_vaddr;   // virtual address of the process header loaded into memory relative to the first loaded segment
+    Elf64_Addr  phdr_table_vaddr;   // virtual address of the process header loaded into memory relative to the first loaded segment
 } bin_info_table_T;
 
 /**
