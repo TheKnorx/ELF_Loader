@@ -2,21 +2,40 @@
 A simple implementation of a ELF binary loader, inspired by the 
 [linux kernel function `load_elf_binary` at binfmt_elf.c](https://github.com/torvalds/linux/blob/master/fs/binfmt_elf.c)
 
-This loader is only intended for loading a simple* AMD-x86-64 EFI executable. Maybe, more features will be added in the future.
+This loader is intended for loading a *simple*\* AMD-x86-64 EFI executable that fulfills the following requirements: 
+- statically linked (gcc: `-static`)
+- no Position Independent Code (gcc: `-no-PIE`)
 
-\* simple meaning the more complex the program gets in its operations, the more likely it is for the loader and consequently the program to fail. Failure might not even occur until after the loader has presumably successful loaded the program; - don't expect a full-blown, all edge-cases-fixing ELF loader 
+\* *simple meaning the more complex the program gets in its operations, the more likely it is for the loader and consequently the program to fail. Failure might not even occur until after the loader has presumably successful loaded the program; - don't expect a full-blown, all edge-cases-fixing ELF loader*
 
-### Comment style for functions:
-```C
-/*
-* @param <parameter-name> {parameter-description}
-* @param ...
-* @return {return-description}
-*/
-```
-<br><br>
+Support for dynamically linked executables (and therefore also for the ELF Interpreter `ld-linux`) is not planned. 
+
+## Planned features
+- Support for Position Independent Code
+
+---
+
+## Commit `b3acf13`:
+The loader, as provided until this commit, is capable of loading gcc-compiled programs.
+The program does end smoothly after the loaded process ends (due to gcc's exit routines); the caveat with this obviously being that the loader doesn't regain control after jumping into the new program, leaving memory still allocated and file-descriptors still open. This will be changed in future commits! 
+
+This commit yet again represents an even bigger milestone for the project, marking the completion of the foundation of the loader. As for now, every future commit will either be about fine-tuning, edge-case-handling or adding a new feature.
+
 ## Commit `6434421`
 The loader in this commit supports loading pure (and simple) nasm programs. 
 It **DOES NOT** end smoothly after the loaded process ends (process ends with SEGFAULT) and correct execution is not guaranteed nor fully tested yet!
 
 This commit purely marks a milestone for the project: finally being able to see acceptable and visual results of the loaders successful working inner core. 
+
+<br><br>
+### Comment style for C-functions:
+```C
+/*
+* {Description of the function}
+* 
+* @param <parameter-name> {parameter-description}
+* @param ...
+* @return {return-description}
+*/
+void foo(){...}
+```
