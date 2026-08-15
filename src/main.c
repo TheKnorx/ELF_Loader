@@ -21,7 +21,8 @@ typedef struct bin_info_table_S {
     Elf64_Phdr* prog_header_table;  // pointer to allocated memory storing the program header table
     Elf64_Shdr* sect_header_table;  // pointer to allocated memory storing the section header table
     int         allocd_segs_len;    // len of allocd_segs array
-    Elf64_Addr* allocd_segs_sizes;  // len of each allocd_segs mapping
+    void**      allocd_segs;        // array of pointer to allocated segments
+    Elf64_Xword* allocd_segs_sizes;  // len of each allocd_segs mapping
     void*       initial_user_stack; // points to the beginning (lowest address) of the stack
     void*       initial_user_stack_sp;  // stack pointer to set for the initial user stack
     void**      allocd_segs;        // array of pointer to allocated segments
