@@ -22,10 +22,9 @@ typedef struct bin_info_table_S {
     Elf64_Shdr* sect_header_table;  // pointer to allocated memory storing the section header table
     int         allocd_segs_len;    // len of allocd_segs array
     void**      allocd_segs;        // array of pointer to allocated segments
-    Elf64_Xword* allocd_segs_sizes;  // len of each allocd_segs mapping
+    Elf64_Xword* allocd_segs_sizes; // len of each allocd_segs mapping
     void*       initial_user_stack; // points to the beginning (lowest address) of the stack
     void*       initial_user_stack_sp;  // stack pointer to set for the initial user stack
-    void**      allocd_segs;        // array of pointer to allocated segments
     Elf64_Addr  last_mapping_size;  // holds the last mapping size --> for calculating the next mapping
     Elf64_Xword page_size;          // page size specified in the elf program headers
     Elf64_Addr  phdr_table_vaddr;   // virtual address of the process header loaded into memory relative to the first loaded segment
