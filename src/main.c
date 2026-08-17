@@ -428,24 +428,32 @@ int do_relocations(bin_info_table_T* bin_infos) {
 }
 
 /**
- * Function for freeing all the allocated memory, closing all files, etc...
+ * Function for freeing all the loader-internal memory, closing all files, etc...
  *
  * @param bin_infos Pointer to data field for storing the return values of this function
  * @return -
  */
-void cleanup(bin_info_table_T* bin_infos) {
-    DEBUG("Cleaning up")
+void loader_cleanup(bin_info_table_T* bin_infos) {
+    DEBUG("Cleaning up loader internal stuff")
     free(bin_infos->prog_header_table);
     bin_infos->prog_header_table = nullptr;
     free(bin_infos->elf_header);
     bin_infos->elf_header = nullptr;
+    free(bin_infos->allocd_segs);
+    bin_infos->allocd_segs = nullptr;
+    free(bin_infos->allocd_segs_sizes);
+    bin_infos->allocd_segs_sizes = nullptr;
+    fclose(bin_infos->elf_fstream);  // if this fails, we just ignore it
+    bin_infos->elf_fstream = nullptr;
+}
+
+void proc_img_cleanup(const bin_info_table_T* bin_infos) {
+    DEBUG("Cleaning up new process image")
     if (nullptr == bin_infos->allocd_segs) goto allocd_segs_free_end;
     for (int i = 0; i<bin_infos->allocd_segs_len; i++) {
         if (MAP_FAILED != bin_infos->allocd_segs[i]) munmap(bin_infos->allocd_segs[i], bin_infos->allocd_segs_sizes[i]);
     }
-    free(bin_infos->allocd_segs);
     allocd_segs_free_end:
-    free(bin_infos->allocd_segs_sizes);
     if (MAP_FAILED != bin_infos->initial_user_stack) munmap(bin_infos->initial_user_stack, sizeof(void*));
 }
 
@@ -473,13 +481,14 @@ int main(const int argc, char **argv) {
 
     if (0 > create_initial_stack(&binary_infos, argc-1, argv+1)) JMP_W_CERROR("Failed to create initial stack", on_error);
 
-    // if (0 > do_relocations(&binary_infos)) JMP_W_CERROR("Failed to do relocations", on_error);
+    loader_cleanup(&binary_infos);
 
     fflush(nullptr);
     transfer_control((void*)binary_infos.entrypoint, binary_infos.initial_user_stack_sp);
 
     do_cleanup:
-    cleanup(&binary_infos);
+    proc_img_cleanup(&binary_infos);
+    loader_cleanup(&binary_infos);
     return retval;
     on_error:
     retval = -EXIT_FAILURE;
