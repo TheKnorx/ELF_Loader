@@ -3,8 +3,8 @@ A simple implementation of a ELF binary loader, inspired by the
 [linux kernel function `load_elf_binary` at binfmt_elf.c](https://github.com/torvalds/linux/blob/master/fs/binfmt_elf.c)
 
 This loader is intended for loading a *simple*\* AMD-x86-64 EFI executable that fulfills the following requirements: 
-- statically linked (gcc: `-static`)
-- no Position Independent Code (gcc: `-no-PIE`)
+- statically linked (gcc/ld: `-static`)
+- no Position Independent Code (gcc: `--fno-PIE -no-pie` / ld explicitly: `-no-pie`)
 
 \* *simple meaning the more complex the program gets in its operations, the more likely it is for the loader and consequently the program to fail. Failure might not even occur until after the loader has presumably successful loaded the program; - don't expect a full-blown, all edge-cases-fixing ELF loader*
 
