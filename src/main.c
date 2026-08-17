@@ -395,8 +395,10 @@ int create_initial_stack(bin_info_table_T* bin_infos, const int argc, char** arg
         ALIGN_SP(_sp);
         Elf64_Addr* random_bytes = _sp;
         // create 16 random bytes - for now this is 'random' enough
-        PUSH("1", _sp);  // 8 bytes
-        PUSH("2", _sp);  // 8 bytes
+        for (size_t i = 0; i < 16; i++) random_bytes[i] = (unsigned char)(rand() % 256);  // cast random int to char
+
+        /* stack pointer invalid from here (if needed, _sp = _sp+16) */
+
         auxv[auxv_rand_bytes_i] = (Elf64_auxv_t){.a_type = AT_RANDOM, .a_un = {(uint64_t)random_bytes}};
 
         bin_infos->initial_user_stack = pa;  // append it to the binary information struct for later reference/cleanup
