@@ -159,12 +159,6 @@ int open_and_parse_elf(bin_info_table_T* bin_infos, const char* filename) {
         JMP_W_CERROR("Failed to load program header table", ret)
     }
 
-    // get the section header table if it exists
-    if (0 > get_header_table(bin_infos, elf_header->e_shoff, elf_header->e_shentsize,
-                             elf_header->e_shnum, (void*)&bin_infos->sect_header_table)) {
-        JMP_W_CERROR("Failed to load section header table", ret)
-    }
-
     STANDARD_FUNCTION_RETURN(-ENOEXEC);
 }
 
@@ -404,28 +398,6 @@ int create_initial_stack(bin_info_table_T* bin_infos, const int argc, char** arg
         bin_infos->initial_user_stack = pa;  // append it to the binary information struct for later reference/cleanup
     }
 
-    STANDARD_FUNCTION_RETURN(-EIO);
-}
-
-
-/***/
-int do_relocations(bin_info_table_T* bin_infos) {
-    STANDARD_FUNCTION_START;
-
-    // iterate over the section header table and parse them (shdr_entry.sh_type == SHT_RELA)
-    for (Elf64_Half i = 0; i<bin_infos->elf_header->e_shnum; i++) {
-        const Elf64_Shdr shdr_entry = bin_infos->sect_header_table[i];  // get the next section header entry
-        if (SHT_RELA != shdr_entry.sh_type) continue;  // skip all other sections
-
-        Elf64_Rela* rel_t_a = (Elf64_Rela*)shdr_entry.sh_addr;  // get one relocation table entry with attend
-        for (Elf64_Half j = 0; j<shdr_entry.sh_size / shdr_entry.sh_entsize; j++) {
-            const Elf64_Rela* reloc_entry = rel_t_a+j;
-            if (R_X86_64_IRELATIVE == ELF64_R_TYPE(reloc_entry->r_info))
-            *(void**)reloc_entry->r_offset = ((void* (*) (void)) reloc_entry->r_addend)();
-            DEBUG("Did relocation to %p", *(void**)reloc_entry->r_offset)
-        }
-    }
-    if (0) goto ret;
     STANDARD_FUNCTION_RETURN(-EIO);
 }
 
