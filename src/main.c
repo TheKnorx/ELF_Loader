@@ -491,6 +491,9 @@ int main(const int argc, char **argv) {
 
     loader_cleanup(&binary_infos);
 
+    printf("\n******************************************\n"
+           "* Transferring control to loaded program *\n"
+           "******************************************\n\n");
     fflush(nullptr);
     transfer_control((void*)binary_infos.entrypoint, binary_infos.initial_user_stack_sp);
 
