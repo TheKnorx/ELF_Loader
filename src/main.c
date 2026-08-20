@@ -33,11 +33,11 @@ typedef struct bin_info_table_S {
 
 /**
  * Function for seeking with offsets of greater length than `long', namely up to an offsets of type `Elf64_Off'
+ *
  * @param fd File descriptor for file to seek in
  * @param offset Offset to seek within the file
  * @param whence Position to begin seeking in the file
  * @return Returns 0 if successful, an errno code if not successful
-
  */
 long long int safe_lseek(const int fd, Elf64_Off offset, int whence) {
     STANDARD_FUNCTION_START
@@ -67,6 +67,7 @@ long long int safe_lseek(const int fd, Elf64_Off offset, int whence) {
  * Important: The current file position is not altered! The bytes read are not returned!
  * It also checks the result of the read and throws an error if necessary.
  * (Packing this into its own functions to avoid code duplication.)
+ *
  * @param fd File descriptor
  * @param buf Buffer to write things into
  * @param nbytes Number of bytes to read from the file
@@ -88,7 +89,7 @@ int safe_read(const int fd, void* buf, const size_t nbytes) {
 /**
  * Function for extracting the program- and section- header table from the elf file given the offset, its size and the amount of entries
  *
- * @param bin_infos Pointer to data field for storing the return values of this function
+ * @param bin_infos Pointer to data field for storing and retrieving information
  * @param offset Offset in elf file where the header table entries are stored
  * @param hdr_t_size Size of the table
  * @param hdr_t_ent Amount of entries in the table
@@ -135,7 +136,7 @@ int get_header_table(
  * extracting header- and general information
  * Basically, every field is processed in the same order as they appear in the man-page --> `man elf`
  *
- * @param bin_infos Pointer to data field for storing the return values of this function
+ * @param bin_infos Pointer to data field for storing and retrieving information
  * @param filename Path to and Filename of the ELF binary
  * @return Returns 0 if successful, an errno code if not successful
  */
@@ -191,7 +192,8 @@ int open_and_parse_elf(bin_info_table_T* bin_infos, const char* filename) {
 }
 
 /**
- * Function for allocating or resizing an array by @param type_s * @param array_size
+ * Function for allocating or resizing an array by type_s * array_size
+ *
  * @param array Pointer to array to allocate/resize
  * @param array_size Current size of the array
  * @param type_s Type that gets stored in the array, so we can calculate the new size
@@ -212,7 +214,7 @@ int realloc_array(void** array, const int* array_size, const int type_s) {
  * Function for loading the segment headers from the program header table into memory
  * and mapping all the relevant segments into the virtual address space of the new process
  *
- * @param bin_infos Pointer to data field for storing the return values of this function
+ * @param bin_infos Pointer to data field for storing and retrieving information
  * @return Returns 0 if successful, an errno code if not successful
  */
 int load_alloc_segments(bin_info_table_T* bin_infos) {
@@ -314,7 +316,7 @@ int load_alloc_segments(bin_info_table_T* bin_infos) {
 /**
  * Function for creating the initial user stack and filling it with argc, argv, envp and auxv
  *
- * @param bin_infos Pointer to data field for storing the return values of this function
+ * @param bin_infos Pointer to data field for storing and retrieving information
  * @param argc The length of argv
  * @param argv The argv to pass to the new process
  * @return Returns 0 if successful, an errno code if not successful
@@ -432,7 +434,7 @@ int create_initial_stack(bin_info_table_T* bin_infos, const int argc, char** arg
 /**
  * Function for freeing all the loader-internal memory, closing all files, etc...
  *
- * @param bin_infos Pointer to data field for storing the return values of this function
+ * @param bin_infos Pointer to data field for storing and retrieving information
  * @return -
  */
 void loader_cleanup(bin_info_table_T* bin_infos) {
@@ -449,6 +451,11 @@ void loader_cleanup(bin_info_table_T* bin_infos) {
     bin_infos->elf_fd = -1;
 }
 
+/**
+ * Function for cleaning up the loaded process image in case of an error
+ *
+ * @param bin_infos Pointer to data field for storing and retrieving information
+ */
 void proc_img_cleanup(const bin_info_table_T* bin_infos) {
     DEBUG("Cleaning up new process image")
     if (nullptr == bin_infos->allocd_segs) goto allocd_segs_free_end;
