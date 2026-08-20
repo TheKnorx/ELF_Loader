@@ -56,7 +56,7 @@ extern ssize_t memcpy_n(void* dest, const void* src);
 #define PUSH(VAL, SP) {*SP = (Elf64_Xword)VAL; SP = (Elf64_Xword*)((Elf64_Xword)SP + POINTER_SIZE);}
 
 /* Align a stack pointer to be: SP (mod 16) = 0 */
-#define ALIGN_SP(SP) {SP = (Elf64_Xword*)((Elf64_Xword)_sp + 16 - (Elf64_Xword)_sp % 16);}
+#define ALIGN_SP(SP) {SP = (Elf64_Xword*)((Elf64_Xword)SP + 16 - (Elf64_Xword)SP % 16);}
 
 // For 'converting' a macro tag to a string - e.g. for debugging, etc...
 #define M_TO_STR(M) #M
