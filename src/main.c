@@ -78,6 +78,7 @@ int get_header_table(
     ) {
     STANDARD_FUNCTION_START;
 
+    // define whether we handle a section header or a program header
     const char* hdr_t_type = bin_infos->elf_header->e_phoff == offset ? "program" : "section";
 
     // check if the header table exits
