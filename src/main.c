@@ -434,7 +434,6 @@ int create_initial_stack(bin_info_table_T* bin_infos, const int argc, char** arg
  * Function for freeing all the loader-internal memory, closing all files, etc...
  *
  * @param bin_infos Pointer to data field for storing and retrieving information
- * @return -
  */
 void loader_cleanup(bin_info_table_T* bin_infos) {
     DEBUG("Cleaning up loader internal stuff")
@@ -478,7 +477,6 @@ int main(const int argc, char **argv) {
         printf("Usage: %s <path/to/ELF/binary>\n", *argv);
         return 0;
     }
-    int retval = EXIT_SUCCESS;
     srand(time(nullptr));
 
     bin_info_table_T binary_infos = {0};
@@ -497,11 +495,10 @@ int main(const int argc, char **argv) {
     fflush(nullptr);
     transfer_control((void*)binary_infos.entrypoint, binary_infos.initial_user_stack_sp);
 
-    do_cleanup:
+    /* if we came here, something went wrong
+     * --> clean everything up and exit the program  */
+    on_error:
     proc_img_cleanup(&binary_infos);
     loader_cleanup(&binary_infos);
-    return retval;
-    on_error:
-    retval = -EXIT_FAILURE;
-    goto do_cleanup;
+    return -EXIT_FAILURE;
 }
