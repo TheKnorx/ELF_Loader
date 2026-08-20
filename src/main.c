@@ -10,12 +10,13 @@
 #include <unistd.h>
 #include <sys/auxv.h>
 #include <limits.h>
+#include <fcntl.h>
 
 #include "main.h"
 
 typedef struct bin_info_table_S {
     Elf64_Addr  entrypoint;         // this maybe zero
-    FILE*       elf_fstream;        // file stream of the ELF file
+    int         elf_fd;             // file stream of the ELF file
     __u_long    elf_file_size;      // size of the complete efi file
     Elf64_Ehdr* elf_header;         // pointer to allocated memory storing the elf header
     Elf64_Phdr* prog_header_table;  // pointer to allocated memory storing the program header table
@@ -32,31 +33,56 @@ typedef struct bin_info_table_S {
 
 /**
  * Function for seeking with offsets of greater length than `long', namely up to an offsets of type `Elf64_Off'
- * @param stream File stream to seek in
+ * @param fd File descriptor for file to seek in
  * @param offset Offset to seek within the file
  * @param whence Position to begin seeking in the file
+ * @return Returns 0 if successful, an errno code if not successful
+
  */
-int safe_fseeko(FILE *stream, Elf64_Off offset, int whence) {
+long long int safe_lseek(const int fd, Elf64_Off offset, int whence) {
     STANDARD_FUNCTION_START
 
-    // First have this fseeko block so we can use the whence as a starting point
+    // First have this lseek block so we can use the whence as a starting point
     if (offset > LONG_MAX) {
-        if (0 > fseeko(stream, LONG_MAX, whence)) JMP_W_ERROR("Initial fseeko failed", ret);
+        if (0 > lseek(fd, LONG_MAX, whence)) JMP_W_ERROR("Initial lseek failed", ret);
         offset -= LONG_MAX;
         whence = SEEK_CUR;
     }
 
     // Next, while the offset is still greater than LONG_MAX, seek with LONG_MAX until its less or equal than LONG_MAX
     while (offset > LONG_MAX) {
-        if (0 > fseeko(stream, LONG_MAX, whence)) JMP_W_ERROR("Iterative fseeko failed", ret);
+        if (0 > lseek(fd, LONG_MAX, whence)) JMP_W_ERROR("Iterative lseek failed", ret);
         offset -= LONG_MAX;
     }
 
     // Finally, the offset the less or equal to LONG_MAX so we seek with the offset that is left (cast to a long)
-    if (0 > fseeko(stream, (long)offset, whence)) JMP_W_ERROR("Closing fseeko failed", ret);
+    if (0 > lseek(fd, (long)offset, whence)) JMP_W_ERROR("Closing lseek failed", ret);
 
     // Just return -errno in any case as we don't have any other instructions that would need a retval themselves
     STANDARD_FUNCTION_RETURN(-errno);
+}
+
+/**
+ * This functions reads in nbytes from fd and stores them in buf using the kernel function `read`.
+ * Important: The current file position is not altered! The bytes read are not returned!
+ * It also checks the result of the read and throws an error if necessary.
+ * (Packing this into its own functions to avoid code duplication.)
+ * @param fd File descriptor
+ * @param buf Buffer to write things into
+ * @param nbytes Number of bytes to read from the file
+ * @return Returns 0 if successful, an errno code if not successful
+ */
+int safe_read(const int fd, void* buf, const size_t nbytes) {
+    STANDARD_FUNCTION_START;
+
+    const long long int cur_fpos = safe_lseek(fd, 0, SEEK_CUR);  // get the current file position to restore it later
+    const ssize_t read_result = read(fd, buf, nbytes);
+    if (!read_result) JMP_W_CERROR("Unexpectedly reached EOF", ret);
+    if (-1 == read_result || nbytes != (Elf64_Xword)read_result)
+        JMP_W_ERROR("Failed to read segment from file", ret);
+    safe_lseek(fd, cur_fpos, SEEK_SET);
+
+    STANDARD_FUNCTION_RETURN(-EIO);
 }
 
 /**
@@ -87,7 +113,7 @@ int get_header_table(
     if (offset > bin_infos->elf_file_size) JMP_W_CERROR("%s header table is beyond EOF", ret, hdr_t_type);
 
     // next get the header table
-    if (0 > safe_fseeko(bin_infos->elf_fstream, offset, SEEK_SET))
+    if (0 > safe_lseek(bin_infos->elf_fd, offset, SEEK_SET))
         JMP_W_CERROR("Failed to seek in file", ret);
 
     const Elf64_Word phdrtsize = hdr_t_size * hdr_t_ent;
@@ -97,7 +123,7 @@ int get_header_table(
         JMP_W_ERROR("Detailed allocation error", ret);
     }
     // read the header from the elf file and check, if we got all the bytes
-    if (phdrtsize != fread(hdr_buffer, 1, phdrtsize, bin_infos->elf_fstream))
+    if (0 > safe_read(bin_infos->elf_fd, hdr_buffer, phdrtsize))
         JMP_W_CERROR("Failed to read the %s header table", ret, hdr_t_type);
 
     *hdr_t_ptr = hdr_buffer;
@@ -118,19 +144,20 @@ int open_and_parse_elf(bin_info_table_T* bin_infos, const char* filename) {
     STANDARD_FUNCTION_START;
 
     // create a stdio file obj to the elf binary
-    FILE* elf_file_stream = fopen(filename, "r");
-    if (NULL == elf_file_stream) JMP_W_ERROR("Failed to open the ELF binary", ret);
-    bin_infos->elf_fstream = elf_file_stream;
-    if (0 > safe_fseeko(elf_file_stream, 0L, SEEK_END))
+    const int elf_fd = open(filename, O_RDONLY);
+    if (-1 == elf_fd) JMP_W_ERROR("Failed to open the ELF binary", ret);
+    bin_infos->elf_fd = elf_fd;
+    const long long int elf_file_size = lseek(elf_fd, 0L, SEEK_END);
+    if (0 > elf_file_size)
         JMP_W_CERROR("Failed to seek in file", ret);
-    bin_infos->elf_file_size = ftell(elf_file_stream);
-    rewind(elf_file_stream);
+    bin_infos->elf_file_size = elf_file_size;
+    lseek(elf_fd, 0, SEEK_SET);  // set the file position to the beginning of the file
 
     // get the elf file header
     Elf64_Ehdr* elf_header = calloc(1, ELF_HEADER_SIZE);
     if (NULL == elf_header) JMP_W_CERROR("Failed to allocate space for the efi-header-buffer", ret);
     bin_infos->elf_header = elf_header;
-    if (ELF_HEADER_SIZE != fread(elf_header, 1, ELF_HEADER_SIZE, elf_file_stream))
+    if (0 > safe_read(elf_fd, elf_header, ELF_HEADER_SIZE))
         JMP_W_CERROR("Failed to read the elf header", ret);
 
     /* Do consistency-checks to make sure it's an actual ELF file and also if we can process it */
@@ -269,9 +296,9 @@ int load_alloc_segments(bin_info_table_T* bin_infos) {
         fflush(stdout);
 
         // read in the segment data from the elf file and write it into the allocated memory of the segment
-        if (0 > safe_fseeko(bin_infos->elf_fstream, phdr_entry.p_offset, SEEK_SET))
+        if (0 > safe_lseek(bin_infos->elf_fd, phdr_entry.p_offset, SEEK_SET))
             JMP_W_CERROR("Failed to seek in file", ret);
-        if (phdr_entry.p_filesz != fread((void*)(page_start+page_offset), 1, phdr_entry.p_filesz, bin_infos->elf_fstream))
+        if (0 > safe_read(bin_infos->elf_fd, (void*)(page_start+page_offset), phdr_entry.p_filesz))
             JMP_W_CERROR("Failed to read segment from file", ret);
         // memset doesn't return an error, so we assume that this is always successful - idk :)
         memset_((void*)(page_start + page_offset + phdr_entry.p_filesz), 0x00, phdr_entry.p_memsz - phdr_entry.p_filesz);
@@ -418,8 +445,8 @@ void loader_cleanup(bin_info_table_T* bin_infos) {
     bin_infos->allocd_segs = nullptr;
     free(bin_infos->allocd_segs_sizes);
     bin_infos->allocd_segs_sizes = nullptr;
-    fclose(bin_infos->elf_fstream);  // if this fails, we just ignore it
-    bin_infos->elf_fstream = nullptr;
+    close(bin_infos->elf_fd);  // if this fails, we just ignore it
+    bin_infos->elf_fd = -1;
 }
 
 void proc_img_cleanup(const bin_info_table_T* bin_infos) {
