@@ -479,7 +479,7 @@ int main(const int argc, char **argv) {
         return 0;
     }
     int retval = EXIT_SUCCESS;
-    srand(time(NULL));
+    srand(time(nullptr));
 
     bin_info_table_T binary_infos = {0};
 
