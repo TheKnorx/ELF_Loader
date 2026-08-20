@@ -15,7 +15,7 @@ Support for dynamically linked executables (and therefore also for the ELF Inter
 
 ---
 
-## Commit `b3acf13`:
+## Commit `b3acf13`
 The loader, as provided until this commit, is capable of loading gcc-compiled programs.
 The program does end smoothly after the loaded process ends (due to gcc's exit routines); the caveat with this obviously being that the loader doesn't regain control after jumping into the new program, leaving memory still allocated and file-descriptors still open. This was fixed in later commits.
 
