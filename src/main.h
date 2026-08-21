@@ -65,6 +65,12 @@ extern ssize_t memcpy_n(void* dest, const void* src);
 #define JMP_W_CERROR(ERROR_STR, JMP_LABEL, ...) { PRINT_CUSTOM_ERROR(ERROR_STR __VA_OPT__(,) __VA_ARGS__); goto JMP_LABEL; }
 #define JMP_W_ERROR(ERROR_STR, JMP_LABEL) { PRINT_ERROR(ERROR_STR); goto JMP_LABEL; }
 
+/* Macros for getting the MIN/MAX value of two values, VAL1 and VAL2 */
+#define MIN(VAL1, VAL2) ( (VAL1) < (VAL2) ? (VAL1) : (VAL2) )
+#define MAX(VAL1, VAL2) ( (VAL1) > (VAL2) ? (VAL1) : (VAL2) )
+
+/* Align an address to a given page */
+#define ALIGN_TO_PAGE(ADDR, PAGESIZE) ((ADDR) - (ADDR) % (PAGESIZE))
 
 /* This is the standard start of every function - it resets errno
  */

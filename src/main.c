@@ -15,7 +15,7 @@
 #include "main.h"
 
 typedef struct bin_info_table_S {
-    Elf64_Addr  entrypoint;         // this maybe zero
+    Elf64_Addr  entrypoint;         // this maybe zero --> PIE
     int         elf_fd;             // file stream of the ELF file
     __u_long    elf_file_size;      // size of the complete efi file
     Elf64_Ehdr* elf_header;         // pointer to allocated memory storing the elf header
@@ -26,8 +26,14 @@ typedef struct bin_info_table_S {
     void*       initial_user_stack; // points to the beginning (lowest address) of the stack
     void*       initial_user_stack_sp;  // stack pointer to set for the initial user stack
     Elf64_Addr  last_mapping_size;  // holds the last mapping size --> for calculating the next mapping
+    int         sys_page_size;      // systems page size as returned by getpagesize()
     Elf64_Xword page_size;          // page size specified in the elf program headers
     Elf64_Addr  phdr_table_vaddr;   // virtual address of the process header loaded into memory relative to the first loaded segment
+
+    /* PIE vars */
+    bool        isPIE;              // bool to indicate whether the loaded elf is a PIE or not
+    Elf64_Addr  load_bias;          //
+    Elf64_Xword total_mapping_size; // total virtual mapping size of the program image
 } bin_info_table_T;
 
 /**
@@ -174,12 +180,14 @@ int open_and_parse_elf(bin_info_table_T* bin_infos, const char* filename) {
     // for now, we skip checking the EI_OSABI field
 
     // check if the elf file is indeed an executable file --> this is currently the only supported option
-    if (ET_EXEC != elf_header->e_type) JMP_W_CERROR("EFI file is not an executable", ret);
+    if (ET_EXEC != elf_header->e_type && ET_DYN != elf_header->e_type)
+        JMP_W_CERROR("EFI file is not an executable", ret);
+    (ET_DYN != elf_header->e_type) ? (bin_infos->isPIE = true) : (bin_infos->isPIE = false);
     // check if the elf file contains the correct target instruction set architecture (64-bit / for instructions)
     if (EM_X86_64 != elf_header->e_machine) JMP_W_CERROR("EFI file has the wrong instruction set architecture", ret);
 
     // next get the entrypoint (as a virtual address) of the program
-    bin_infos->entrypoint = elf_header->e_entry;  // this maybe zero
+    bin_infos->entrypoint = elf_header->e_entry;  // this could be zero --> PIE
 
     // next get the program header table if it exists
     if (0 > get_header_table(bin_infos, elf_header->e_phoff, elf_header->e_phentsize,
@@ -208,6 +216,38 @@ int realloc_array(void** array, const int* array_size, const int type_s) {
     STANDARD_FUNCTION_RETURN(-ENOMEM)
 }
 
+/**
+ * Function for calculating the total mapping size in virtual memory and the
+ * biggest alignment/the biggest page size needed by the program.
+ *
+ * This function does maybe call itself recursively, if the page size changed
+ * because of its calculations.
+ *
+ * @param bin_infos Pointer to data field for storing and retrieving information
+ * @param default_page_sz The default page size to use for calculations
+ */
+void calc_phdr_vals(bin_info_table_T* bin_infos, const Elf64_Xword default_page_sz) {
+    unsigned long min_addr = -1;
+    unsigned long max_addr = 0;
+
+    /* iterate over the program header table and calculate the total size and the maximum alignment needed */
+    for (Elf64_Half i = 0; i<bin_infos->elf_header->e_phnum; i++) {
+        const Elf64_Phdr phdr_entry = bin_infos->prog_header_table[i];  // get the next program header entry
+
+        // update the global with the values from this iteration
+        bin_infos->page_size = MAX(bin_infos->page_size, phdr_entry.p_align);
+        min_addr = MIN(min_addr, ALIGN_TO_PAGE(phdr_entry.p_vaddr, default_page_sz));
+        max_addr = MAX(max_addr, phdr_entry.p_vaddr+phdr_entry.p_memsz);
+    }
+    // If the page size specified in the elf turns out to be not equal to the system page size, redo the calculations
+    // This should always be true once --> there should never be more than one recursion!
+    if (default_page_sz != bin_infos->page_size) {
+        DEBUG("Recursive call on function calc_phdr_vals!")
+        calc_phdr_vals(bin_infos, bin_infos->page_size);  // this should never result in another recursive call
+        return;  // skip the below code
+    }
+     bin_infos->total_mapping_size = max_addr - min_addr;
+}
 
 /**
  * Function for loading the segment headers from the program header table into memory
@@ -218,6 +258,9 @@ int realloc_array(void** array, const int* array_size, const int type_s) {
  */
 int load_alloc_segments(bin_info_table_T* bin_infos) {
     STANDARD_FUNCTION_START;
+
+    // calculate the biggest alignment and the total mapping size
+    calc_phdr_vals(bin_infos, bin_infos->sys_page_size);
 
     // iterate over the program header table and load the segments we need --> p_type=PT_LOAD
     for (Elf64_Half i = 0; i<bin_infos->elf_header->e_phnum; i++) {
@@ -230,9 +273,7 @@ int load_alloc_segments(bin_info_table_T* bin_infos) {
             bin_infos->phdr_table_vaddr = phdr_entry.p_vaddr;
             continue;
         }
-
         if (PT_LOAD != phdr_entry.p_type) continue;  // skip all other segments
-        if (!bin_infos->page_size && 0 != phdr_entry.p_align) bin_infos->page_size = phdr_entry.p_align;
 
         /* Calculate the phdr-tables's (PHT) virtual address if there is no PHDR entry to describe it:
          * To do that we have to check if the virtual offset of the PHT does include the file offset of the PHT.
@@ -479,7 +520,8 @@ int main(const int argc, char **argv) {
     }
     srand(time(nullptr));
 
-    bin_info_table_T binary_infos = {0};
+    bin_info_table_T binary_infos = {0};  // initialize everything to zero
+    binary_infos.sys_page_size = getpagesize();
 
     if (0 > open_and_parse_elf(&binary_infos, argv[1])) JMP_W_CERROR("Failed to load ELF header", on_error);
 
