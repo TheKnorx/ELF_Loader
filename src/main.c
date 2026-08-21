@@ -262,6 +262,8 @@ int load_alloc_segments(bin_info_table_T* bin_infos) {
     // calculate the biggest alignment and the total mapping size
     calc_phdr_vals(bin_infos, bin_infos->sys_page_size);
 
+    bool first_pt_load = true;
+
     // iterate over the program header table and load the segments we need --> p_type=PT_LOAD
     for (Elf64_Half i = 0; i<bin_infos->elf_header->e_phnum; i++) {
         const Elf64_Phdr phdr_entry = bin_infos->prog_header_table[i];  // get the next program header entry
@@ -287,14 +289,58 @@ int load_alloc_segments(bin_info_table_T* bin_infos) {
             bin_infos->phdr_table_vaddr = phdr_entry.p_vaddr + (bin_infos->elf_header->e_phoff - phdr_entry.p_offset);
         }
 
-        // if we found a loadable segment, allocate memory for the pointer to store it into the array
-        bin_infos->allocd_segs_len++;  // increase the length index
-        if (0 > realloc_array((void**)&bin_infos->allocd_segs, &bin_infos->allocd_segs_len, POINTER_SIZE))
-            JMP_W_CERROR("Realloc failed on segment-mapping-address array", ret)
+        /*
+         * Define some variables that we need later on, but who's values will be
+         * different depending on the type of executable (PIE/no PIE) that is loaded
+         */
+        void* pa;  // begin of the mapped memory region
+        Elf64_Addr page_offset;  // offset to where to write the segment data
 
-        // also (re)alloc the segment-mapping-sizes array
-        if (0 > realloc_array((void**)&bin_infos->allocd_segs_sizes, &bin_infos->allocd_segs_len, sizeof(Elf64_Addr)))
-            JMP_W_CERROR("Realloc failed on segment-mapping-sizes array", ret)
+        /*
+         * If the executable is a (static) PIE, we allocate
+         * the whole mapping at once. This is only possible
+         * with PIEs. For detailed explanation see kernel function
+         * This logic only runs once
+         */
+        if (first_pt_load && bin_infos->isPIE) {
+            first_pt_load = false;  //
+            page_offset = phdr_entry.p_vaddr;  // for PIEs the vaddr is kind of the offset for the segments
+            bin_infos->last_mapping_size = bin_infos->total_mapping_size; // set this for possible future error messages to work
+
+            // allocate space for the one pointer that will point to the mapped memory region
+            if (NULL == (bin_infos->allocd_segs = calloc(1, POINTER_SIZE)))
+                JMP_W_CERROR("Realloc failed on segment-mapping-address array", ret)
+
+            // we map one large area, who's size we already saved, so we need this array
+            bin_infos->allocd_segs_sizes = nullptr;
+
+            /*
+             * Map the whole virtual memory of the program image.
+             * Here, 0 is used for the address to let mmap decide
+             * which address to use. Whether this address was created
+             * using ASLR or not depends on the implementation of mmap
+             */
+            // always set the protection of the mapping to write, cause we still have to write the segment data
+            pa = mmap(nullptr, bin_infos->total_mapping_size, PROT_WRITE,
+                MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+
+            if (MAP_FAILED != pa) {
+                DEBUG("Successfully created memory mapping at address %p with size %lu", (void*)pa,
+                    bin_infos->total_mapping_size);
+                bin_infos->allocd_segs[bin_infos->allocd_segs_len++] = pa;  // I am too lazy to explain why this works
+            }
+        }
+        else {
+            /* If it's a normal executable, map every segment separately */
+
+            // if we found a loadable segment, allocate memory for the pointer to store it into the array
+            bin_infos->allocd_segs_len++;  // increase the length index
+            if (0 > realloc_array((void**)&bin_infos->allocd_segs, &bin_infos->allocd_segs_len, POINTER_SIZE))
+                JMP_W_CERROR("Realloc failed on segment-mapping-address array", ret)
+
+            // also (re)alloc the segment-mapping-sizes array
+            if (0 > realloc_array((void**)&bin_infos->allocd_segs_sizes, &bin_infos->allocd_segs_len, sizeof(Elf64_Addr)))
+                JMP_W_CERROR("Realloc failed on segment-mapping-sizes array", ret)
 
         // next allocate the actual segment with the correct address
         const Elf64_Word phdrflags = phdr_entry.p_flags;
@@ -314,39 +360,59 @@ int load_alloc_segments(bin_info_table_T* bin_infos) {
          * Now the data of the segment can be written into the page at:
          * *(page_start + page_offset) = segment_data
          */
+            /* Next calculate the correct page start, map it, and write the segment into the correct offset
+             * Calculate the start of the page in which the next segment resides:
+             * page_start = vaddr - (vaddr - align)
+             * --> so now page_start % align = 0
+             *
+             * Calculate the offset to where the segment will be written within the page and the size of the mapping:
+             * page_offset = p_vaddr - page_start
+             * mapping_size = page_offset + p_memsz
+             *
+             * Now the data of the segment can be written into the page at:
+             * *(page_start + page_offset) = segment_data
+             */
 
-        const Elf64_Addr page_start = phdr_entry.p_vaddr - phdr_entry.p_vaddr % bin_infos->page_size;
-        const Elf64_Addr page_offset = phdr_entry.p_vaddr - page_start;
-        const Elf64_Addr mapping_size = page_offset + phdr_entry.p_memsz;
-        bin_infos->last_mapping_size = mapping_size;
-        bin_infos->allocd_segs_sizes[i] = mapping_size;
-        // always set the protection of the mapping to write, cause we still have to write the segment data
-        void* const pa = mmap((void*)page_start, mapping_size, PROT_WRITE,
-            MAP_PRIVATE | MAP_ANONYMOUS | MAP_FIXED, -1, 0);
+            const Elf64_Addr page_start = phdr_entry.p_vaddr - phdr_entry.p_vaddr % bin_infos->page_size;
+            page_offset = phdr_entry.p_vaddr - page_start;
+            const Elf64_Addr mapping_size = page_offset + phdr_entry.p_memsz;
+            bin_infos->last_mapping_size = mapping_size;
+            bin_infos->allocd_segs_sizes[i] = mapping_size;
+
+            /* map the corresponding memory region */
+            // always set the protection of the mapping to write, cause we still have to write the segment data
+            pa = mmap((void*)page_start, mapping_size, PROT_WRITE,
+                MAP_PRIVATE | MAP_ANONYMOUS | MAP_FIXED, -1, 0);
+
+            if (MAP_FAILED != pa) {
+                bin_infos->allocd_segs[bin_infos->allocd_segs_len-1] = pa;
+                if (pa != (void*)page_start)
+                    JMP_W_CERROR("Failed to allocate memory for segment at correct address. \n"
+                                 "Provided addr by mmap: %p vs. calculated addr from hdr: %p", ret, pa, (void*)page_start)
+
+                DEBUG("Successfully created memory mapping at address %p with size %lu", (void*)pa, mapping_size);
+                fflush(stdout);
+            }
+        }
+
         if (MAP_FAILED == pa) {
-            PRINT_CUSTOM_ERROR("Failed to allocate memory at address %p with size %lu", (void*)page_start, mapping_size);
+            PRINT_CUSTOM_ERROR("Failed to allocate memory at address %p with size %lu",
+                bin_infos->allocd_segs[bin_infos->allocd_segs_len-1], bin_infos->last_mapping_size);
             PRINT_ERROR("Error from mmap");
             goto ret;
         }
-        bin_infos->allocd_segs[bin_infos->allocd_segs_len-1] = pa;
-        if (pa != (void*)page_start)
-            JMP_W_CERROR("Failed to allocate memory for segment at correct address. \n"
-                         "Provided addr by mmap: %p vs. calculated addr from hdr: %p", ret, pa, (void*)page_start)
-
-        DEBUG("Successfully created memory mapping at address %p with size %lu of type %s", (void*)page_start,
-            mapping_size, phdr_entry.p_type == PT_LOAD ? M_TO_STR(PT_LOAD) : M_TO_STR(PT_TLS));
-        fflush(stdout);
 
         // read in the segment data from the elf file and write it into the allocated memory of the segment
         if (0 > safe_lseek(bin_infos->elf_fd, phdr_entry.p_offset, SEEK_SET))
             JMP_W_CERROR("Failed to seek in file", ret);
-        if (0 > safe_read(bin_infos->elf_fd, (void*)(page_start+page_offset), phdr_entry.p_filesz))
+        if (0 > safe_read(bin_infos->elf_fd, (void*)((Elf64_Addr)pa + page_offset), phdr_entry.p_filesz))
             JMP_W_CERROR("Failed to read segment from file", ret);
         // memset doesn't return an error, so we assume that this is always successful - idk :)
-        memset_((void*)(page_start + page_offset + phdr_entry.p_filesz), 0x00, phdr_entry.p_memsz - phdr_entry.p_filesz);
+        memset_((void*)((Elf64_Addr)pa + page_offset + phdr_entry.p_filesz), 0x00, phdr_entry.p_memsz - phdr_entry.p_filesz);
 
         // next set the actual (correct) flags for this memory mapping
-        const int mmap_seg_prot = (phdrflags & PF_X ? PROT_EXEC : 0) | (phdrflags & PF_W ? PROT_WRITE : 0) | (phdrflags & PF_R ? PROT_READ : 0);
+        const int mmap_seg_prot = (phdr_entry.p_flags & PF_X ? PROT_EXEC : 0) |
+            (phdr_entry.p_flags & PF_W ? PROT_WRITE : 0) | (phdr_entry.p_flags & PF_R ? PROT_READ : 0);
         if (-1 == mprotect(pa, phdr_entry.p_memsz, mmap_seg_prot)) JMP_W_ERROR("memprotect failed", ret);
     }
 
