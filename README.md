@@ -2,22 +2,22 @@
 A simple implementation of a ELF binary loader, inspired by the 
 [linux kernel function `load_elf_binary` at binfmt_elf.c](https://github.com/torvalds/linux/blob/master/fs/binfmt_elf.c)
 
-This loader is intended for loading a *simple*\* AMD-x86-64 EFI executable that fulfills the following requirements: 
+This loader is intended for loading a *simple*\* x86-64 EFI executable that fulfills the following requirements: 
 - statically linked (gcc/ld: `-static`)
-- no Position Independent Code (gcc: `--fno-PIE -no-pie` / ld explicitly: `-no-pie`)
+- no a PIE (Position Independent Executable) (gcc: `-fno-PIE -no-pie` / ld explicitly: `-no-pie`)
 
-\* *simple meaning the more complex the program gets in its operations, the more likely it is for the loader and consequently the program to fail. Failure might not even occur until after the loader has presumably successful loaded the program; - don't expect a full-blown, all edge-cases-fixing ELF loader*
+\* *simple meaning the more complex the program gets in its operations, the more likely it is for the loader and consequently for the program to fail. Failure might not even occur until after the loader has presumably successfully loaded the program; - don't expect a full-blown, all edge-cases-fixing ELF loader!*
 
-Support for dynamically linked executables (and therefore also for the ELF Interpreter `ld-linux`) is not planned. 
+Support for dynamically linked executables (and therefore also for the ELF Interpreter `ld-linux`) or dynamic PIEs is not planned. 
 
 ## Planned features
-- Support for Position Independent Code
+- Support for static PIEs (`-static-PIE`)
 
 ---
 
-## Commit `b3acf13`:
+## Commit `b3acf13`
 The loader, as provided until this commit, is capable of loading gcc-compiled programs.
-The program does end smoothly after the loaded process ends (due to gcc's exit routines); the caveat with this obviously being that the loader doesn't regain control after jumping into the new program, leaving memory still allocated and file-descriptors still open. This will be changed in future commits! 
+The program does end smoothly after the loaded process ends (due to gcc's exit routines); the caveat with this obviously being that the loader doesn't regain control after jumping into the new program, leaving memory still allocated and file-descriptors still open. This was fixed in later commits.
 
 This commit yet again represents an even bigger milestone for the project, marking the completion of the foundation of the loader. As for now, every future commit will either be about fine-tuning, edge-case-handling or adding a new feature.
 
