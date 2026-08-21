@@ -244,7 +244,7 @@ void calc_phdr_vals(bin_info_table_T* bin_infos, const Elf64_Xword default_page_
     // This should always be true once --> there should never be more than one recursion!
     if (default_page_sz != bin_infos->elf_page_size) {
         DEBUG("Recursive call on function calc_phdr_vals!")
-        calc_phdr_vals(bin_infos, bin_infos->page_size);  // this should never result in another recursive call
+        calc_phdr_vals(bin_infos, bin_infos->elf_page_size);  // this should never result in another recursive call
         return;  // skip the below code
     }
 
