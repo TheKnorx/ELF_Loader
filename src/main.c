@@ -23,17 +23,18 @@ typedef struct bin_info_table_S {
     int         allocd_segs_len;    // len of allocd_segs array
     void**      allocd_segs;        // array of pointer to allocated segments
     Elf64_Xword* allocd_segs_sizes; // len of each allocd_segs mapping
-    void*       initial_user_stack; // points to the beginning (lowest address) of the stack
-    void*       initial_user_stack_sp;  // stack pointer to set for the initial user stack
+    void*       initial_user_stack; // points to the beginning (lowest address) of the memory of the stack
+    void*       initial_user_stack_sp;  // points to the beginning (highest address) of the initial user stack
     Elf64_Addr  last_mapping_size;  // holds the last mapping size --> for calculating the next mapping
     int         sys_page_size;      // systems page size as returned by getpagesize()
-    Elf64_Xword page_size;          // page size specified in the elf program headers
+    Elf64_Xword elf_page_size;          // page size specified in the elf program headers
     Elf64_Addr  phdr_table_vaddr;   // virtual address of the process header loaded into memory relative to the first loaded segment
 
     /* PIE vars */
     bool        isPIE;              // bool to indicate whether the loaded elf is a PIE or not
     Elf64_Addr  load_bias;          //
     Elf64_Xword total_mapping_size; // total virtual mapping size of the program image
+    Elf64_Addr  initial_user_stack_PIC; // points to the user stack relative to the PIE-base
 } bin_info_table_T;
 
 /**
@@ -235,18 +236,26 @@ void calc_phdr_vals(bin_info_table_T* bin_infos, const Elf64_Xword default_page_
         const Elf64_Phdr phdr_entry = bin_infos->prog_header_table[i];  // get the next program header entry
 
         // update the global with the values from this iteration
-        bin_infos->page_size = MAX(bin_infos->page_size, phdr_entry.p_align);
-        min_addr = MIN(min_addr, ALIGN_TO_PAGE(phdr_entry.p_vaddr, default_page_sz));
+        bin_infos->elf_page_size = MAX(bin_infos->elf_page_size, phdr_entry.p_align);
+        min_addr = MIN(min_addr, ALIGN_TO_PAGE_DOWN(phdr_entry.p_vaddr, default_page_sz));
         max_addr = MAX(max_addr, phdr_entry.p_vaddr+phdr_entry.p_memsz);
     }
     // If the page size specified in the elf turns out to be not equal to the system page size, redo the calculations
     // This should always be true once --> there should never be more than one recursion!
-    if (default_page_sz != bin_infos->page_size) {
+    if (default_page_sz != bin_infos->elf_page_size) {
         DEBUG("Recursive call on function calc_phdr_vals!")
         calc_phdr_vals(bin_infos, bin_infos->page_size);  // this should never result in another recursive call
         return;  // skip the below code
     }
-     bin_infos->total_mapping_size = max_addr - min_addr;
+
+    /* If the executable is a PIE, we also have to include the stack size in the total size */
+    if (bin_infos->isPIE) {
+        bin_infos->initial_user_stack_PIC = ALIGN_TO_PAGE_UP(max_addr, bin_infos->elf_page_size);
+        bin_infos->total_mapping_size = ALIGN_TO_PAGE_UP(
+            bin_infos->initial_user_stack_PIC + DEFAULT_STACK_SIZE, bin_infos->elf_page_size
+            ) - min_addr;
+    }
+    else bin_infos->total_mapping_size = max_addr - min_addr;
 }
 
 /**
@@ -263,6 +272,8 @@ int load_alloc_segments(bin_info_table_T* bin_infos) {
     calc_phdr_vals(bin_infos, bin_infos->sys_page_size);
 
     bool first_pt_load = true;
+    /* Begin of the mapped memory region */
+    void* pa = nullptr;
 
     // iterate over the program header table and load the segments we need --> p_type=PT_LOAD
     for (Elf64_Half i = 0; i<bin_infos->elf_header->e_phnum; i++) {
@@ -293,8 +304,13 @@ int load_alloc_segments(bin_info_table_T* bin_infos) {
          * Define some variables that we need later on, but who's values will be
          * different depending on the type of executable (PIE/no PIE) that is loaded
          */
-        void* pa;  // begin of the mapped memory region
-        Elf64_Addr page_offset;  // offset to where to write the segment data
+        /*
+         * Offset to where to write the segment data.
+         * Samer as above - set this to the vaddr of the current entry
+         * --> this is kind of the offset for PIE-segments.
+         * If it's not a PIE, this will simply get overwritten
+         */
+        Elf64_Addr page_offset = phdr_entry.p_vaddr;
 
         /*
          * If the executable is a (static) PIE, we allocate
@@ -304,15 +320,15 @@ int load_alloc_segments(bin_info_table_T* bin_infos) {
          */
         if (first_pt_load && bin_infos->isPIE) {
             first_pt_load = false;  //
-            page_offset = phdr_entry.p_vaddr;  // for PIEs the vaddr is kind of the offset for the segments
             bin_infos->last_mapping_size = bin_infos->total_mapping_size; // set this for possible future error messages to work
 
             // allocate space for the one pointer that will point to the mapped memory region
             if (NULL == (bin_infos->allocd_segs = calloc(1, POINTER_SIZE)))
                 JMP_W_CERROR("Realloc failed on segment-mapping-address array", ret)
 
-            // we map one large area, who's size we already saved, so we need this array
-            bin_infos->allocd_segs_sizes = nullptr;
+            // allocate space for the one pointer that will point to the size of the mapped region
+            bin_infos->allocd_segs_sizes = calloc(1, sizeof(Elf64_Xword));
+            bin_infos->allocd_segs_sizes[0] = bin_infos->total_mapping_size;
 
             /*
              * Map the whole virtual memory of the program image.
@@ -327,10 +343,11 @@ int load_alloc_segments(bin_info_table_T* bin_infos) {
             if (MAP_FAILED != pa) {
                 DEBUG("Successfully created memory mapping at address %p with size %lu", (void*)pa,
                     bin_infos->total_mapping_size);
+                bin_infos->load_bias = (Elf64_Addr)pa;
                 bin_infos->allocd_segs[bin_infos->allocd_segs_len++] = pa;  // I am too lazy to explain why this works
             }
         }
-        else {
+        else if (!bin_infos->isPIE) {
             /* If it's a normal executable, map every segment separately */
 
             // if we found a loadable segment, allocate memory for the pointer to store it into the array
@@ -342,24 +359,6 @@ int load_alloc_segments(bin_info_table_T* bin_infos) {
             if (0 > realloc_array((void**)&bin_infos->allocd_segs_sizes, &bin_infos->allocd_segs_len, sizeof(Elf64_Addr)))
                 JMP_W_CERROR("Realloc failed on segment-mapping-sizes array", ret)
 
-        // next allocate the actual segment with the correct address
-        const Elf64_Word phdrflags = phdr_entry.p_flags;
-
-        // TODO: replace fd with efi file descriptor and load the segment directly from the efi file
-
-        /* Next calculate the correct page start, map it, and write the segment into the correct offset
-         *
-         * Calculate the start of the page in which the next segment resides:
-         * page_start = vaddr - (vaddr - align)
-         * --> so now page_start % align = 0
-         *
-         * Calculate the offset to where the segment will be written within the page and the size of the mapping:
-         * page_offset = p_vaddr - page_start
-         * mapping_size = page_offset + p_memsz
-         *
-         * Now the data of the segment can be written into the page at:
-         * *(page_start + page_offset) = segment_data
-         */
             /* Next calculate the correct page start, map it, and write the segment into the correct offset
              * Calculate the start of the page in which the next segment resides:
              * page_start = vaddr - (vaddr - align)
@@ -373,7 +372,7 @@ int load_alloc_segments(bin_info_table_T* bin_infos) {
              * *(page_start + page_offset) = segment_data
              */
 
-            const Elf64_Addr page_start = phdr_entry.p_vaddr - phdr_entry.p_vaddr % bin_infos->page_size;
+            const Elf64_Addr page_start = phdr_entry.p_vaddr - phdr_entry.p_vaddr % bin_infos->elf_page_size;
             page_offset = phdr_entry.p_vaddr - page_start;
             const Elf64_Addr mapping_size = page_offset + phdr_entry.p_memsz;
             bin_infos->last_mapping_size = mapping_size;
@@ -416,6 +415,10 @@ int load_alloc_segments(bin_info_table_T* bin_infos) {
         if (-1 == mprotect(pa, phdr_entry.p_memsz, mmap_seg_prot)) JMP_W_ERROR("memprotect failed", ret);
     }
 
+    // for non-PIEs, the load bias will be zero
+    bin_infos->entrypoint += bin_infos->load_bias;
+    bin_infos->phdr_table_vaddr += bin_infos->load_bias;
+
     STANDARD_FUNCTION_RETURN(-EIO);
 }
 
@@ -430,25 +433,36 @@ int load_alloc_segments(bin_info_table_T* bin_infos) {
 int create_initial_stack(bin_info_table_T* bin_infos, const int argc, char** argv) {
     STANDARD_FUNCTION_START;
 
-    /* Create a new memory mapping for the stack, including argc, argv, etc.
-     * For that we calculate the beginning of the next page starting from the last memory mapping
-     * By doing that here, we have some code duplication but this is inevitable
-     * We assume that the program header entry variable (phdr_entry) is already initialized
-     * We also assume that the address of the last mapped section is already page aligned (- it has to be)
+    void* pa;
+    /*
+     * If the executable is a PIE, the stack was already allocated
+     * in memory, so we only have to calculate the beginning of it.
+     * The result should be page-aligned.
      */
-    Elf64_Addr new_page_start = (Elf64_Addr) bin_infos->allocd_segs[bin_infos->allocd_segs_len-1];
-    new_page_start = new_page_start + bin_infos->last_mapping_size;  // add to the previous addr the mapping size
-    new_page_start = new_page_start + (bin_infos->page_size - new_page_start % bin_infos->page_size);  // make it page aligned
-    void* const pa = mmap((void*)new_page_start, DEFAULT_STACK_SIZE, PROT_WRITE | PROT_READ,
-            MAP_PRIVATE | MAP_ANONYMOUS | MAP_FIXED, -1, 0);
-    if (MAP_FAILED == pa) {
-        PRINT_CUSTOM_ERROR("Failed to allocate memory at address %p with size %d", (void*)new_page_start, DEFAULT_STACK_SIZE);
-        PRINT_ERROR("Error from mmap");
-        goto ret;
+    if (bin_infos->isPIE) {
+        pa = (void*)(bin_infos->load_bias + bin_infos->initial_user_stack_PIC);
     }
-    if (pa != (void*)new_page_start) {
-        JMP_W_CERROR("Failed to allocate memory for segment at correct address. \n"
-                         "Provided addr by mmap: %p vs. calculated addr from hdr: %p", ret, pa, (void*)new_page_start)
+    else {
+        /* Create a new memory mapping for the stack, including argc, argv, etc.
+         * For that we calculate the beginning of the next page starting from the last memory mapping
+         * By doing that here, we have some code duplication but this is inevitable
+         * We assume that the program header entry variable (phdr_entry) is already initialized
+         * We also assume that the address of the last mapped section is already page aligned (- it has to be)
+         */
+        Elf64_Addr new_page_start = (Elf64_Addr) bin_infos->allocd_segs[bin_infos->allocd_segs_len-1];
+        new_page_start = new_page_start + bin_infos->last_mapping_size;  // add to the previous addr the mapping size
+        new_page_start = new_page_start + (bin_infos->elf_page_size - new_page_start % bin_infos->elf_page_size);  // make it page aligned
+        pa = mmap((void*)new_page_start, DEFAULT_STACK_SIZE, PROT_WRITE | PROT_READ,
+                MAP_PRIVATE | MAP_ANONYMOUS | MAP_FIXED, -1, 0);
+        if (MAP_FAILED == pa) {
+            PRINT_CUSTOM_ERROR("Failed to allocate memory at address %p with size %d", (void*)new_page_start, DEFAULT_STACK_SIZE);
+            PRINT_ERROR("Error from mmap");
+            goto ret;
+        }
+        if (pa != (void*)new_page_start) {
+            JMP_W_CERROR("Failed to allocate memory for segment at correct address. \n"
+                             "Provided addr by mmap: %p vs. calculated addr from hdr: %p", ret, pa, (void*)new_page_start)
+        }
     }
 
     /* Create the initial user stack in the new memory mapping manually
@@ -486,7 +500,7 @@ int create_initial_stack(bin_info_table_T* bin_infos, const int argc, char** arg
         auxv[auxv_index++] = (Elf64_auxv_t){.a_type = AT_PHDR, .a_un = {(uint64_t)bin_infos->phdr_table_vaddr}};
         auxv[auxv_index++] = (Elf64_auxv_t){.a_type = AT_PHENT, .a_un = {bin_infos->elf_header->e_phentsize}};
         auxv[auxv_index++] = (Elf64_auxv_t){.a_type = AT_PHNUM, .a_un = {bin_infos->elf_header->e_phnum}};
-        auxv[auxv_index++] = (Elf64_auxv_t){.a_type = AT_PAGESZ, .a_un = {bin_infos->page_size}};
+        auxv[auxv_index++] = (Elf64_auxv_t){.a_type = AT_PAGESZ, .a_un = {bin_infos->elf_page_size}};
         auxv[auxv_index++] = (Elf64_auxv_t){.a_type = AT_BASE, .a_un = {0x00}};  // we dont have an interpreter
         auxv[auxv_index++] = (Elf64_auxv_t){.a_type = AT_FLAGS, .a_un = {0x00}};
         auxv[auxv_index++] = (Elf64_auxv_t){.a_type = AT_ENTRY, .a_un = {bin_infos->elf_header->e_entry}};
@@ -601,6 +615,7 @@ int main(const int argc, char **argv) {
            "* Transferring control to loaded program *\n"
            "******************************************\n\n");
     fflush(nullptr);
+
     transfer_control((void*)binary_infos.entrypoint, binary_infos.initial_user_stack_sp);
 
     /* if we came here, something went wrong
