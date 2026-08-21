@@ -182,7 +182,7 @@ int open_and_parse_elf(bin_info_table_T* bin_infos, const char* filename) {
     // check if the elf file is indeed an executable file --> this is currently the only supported option
     if (ET_EXEC != elf_header->e_type && ET_DYN != elf_header->e_type)
         JMP_W_CERROR("EFI file is not an executable", ret);
-    (ET_DYN != elf_header->e_type) ? (bin_infos->isPIE = true) : (bin_infos->isPIE = false);
+    (ET_DYN == elf_header->e_type) ? (bin_infos->isPIE = true) : (bin_infos->isPIE = false);
     // check if the elf file contains the correct target instruction set architecture (64-bit / for instructions)
     if (EM_X86_64 != elf_header->e_machine) JMP_W_CERROR("EFI file has the wrong instruction set architecture", ret);
 
