@@ -5,7 +5,7 @@ A simple implementation of a ELF binary loader, inspired by the
 This loader is intended for loading a *simple*\* x86-64 EFI executable that fulfills the following requirements: 
 - statically linked (gcc/ld: `-static`)
 - no PIE (Position Independent Executable) at all (gcc: `-fno-PIE -no-pie` / ld explicitly: `-no-pie`)
-- **or** static PIE (gcc: `-fPIE -static-PIE` / ld explicitly: `-static-pie`)
+- **or** static PIE (gcc: `-fPIE -static-PIE` / ld explicitly: `-static -pie`)
 - no dynamic PIE
 
 \* *simple meaning the more complex the program gets in its operations, the more likely it is for the loader and consequently for the program to fail. Failure might not even occur until after the loader has presumably successfully loaded the program; - don't expect a full-blown, all edge-cases-fixing ELF loader!*
