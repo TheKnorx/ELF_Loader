@@ -90,7 +90,7 @@ transfer_control:
     xor     r14, r14
     xor     r15, r15
 
-    jmp     [rel ENTRY_POINT_ADDR]  ; jmp to _start of ELF binary
+    jmp     qword [rel ENTRY_POINT_ADDR]  ; jmp to _start of ELF binary
 
     LEAVE
 
