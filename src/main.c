@@ -32,7 +32,7 @@ typedef struct bin_info_table_S {
 
     /* PIE vars */
     bool        isPIE;              // bool to indicate whether the loaded elf is a PIE or not
-    Elf64_Addr  load_bias;          //
+    Elf64_Addr  load_bias;          // the address at which the program begins to get mapped/loaded
     Elf64_Xword total_mapping_size; // total virtual mapping size of the program image
     Elf64_Addr  initial_user_stack_PIC; // points to the user stack relative to the PIE-base
 } bin_info_table_T;
@@ -302,15 +302,14 @@ int load_alloc_segments(bin_info_table_T* bin_infos) {
 
         /*
          * Define some variables that we need later on, but who's values will be
-         * different depending on the type of executable (PIE/no PIE) that is loaded
+         * different depending on the type of executable (PIE/no PIE) that is loaded.
+         * Those have to be initialized with some value to shut up clion.
          */
-        /*
-         * Offset to where to write the segment data.
-         * Samer as above - set this to the vaddr of the current entry
-         * --> this is kind of the offset for PIE-segments.
-         * If it's not a PIE, this will simply get overwritten
-         */
-        Elf64_Addr page_offset = phdr_entry.p_vaddr;
+        Elf64_Addr page_offset = 0;
+        Elf64_Addr page_start = 0;
+        Elf64_Addr page_end = 0;
+        Elf64_Addr mapping_size = 0;
+        Elf64_Addr mapped_pages_size = 0;  // size of the currently mapped page(es)
 
         /*
          * If the executable is a (static) PIE, we allocate
@@ -320,7 +319,7 @@ int load_alloc_segments(bin_info_table_T* bin_infos) {
          */
         if (first_pt_load && bin_infos->isPIE) {
             first_pt_load = false;  //
-            bin_infos->last_mapping_size = bin_infos->total_mapping_size; // set this for possible future error messages to work
+            //bin_infos->last_mapping_size = bin_infos->total_mapping_size; // set this for possible future error messages to work
 
             // allocate space for the one pointer that will point to the mapped memory region
             if (NULL == (bin_infos->allocd_segs = calloc(1, POINTER_SIZE)))
@@ -343,7 +342,7 @@ int load_alloc_segments(bin_info_table_T* bin_infos) {
             if (MAP_FAILED != pa) {
                 DEBUG("Successfully created memory mapping at address %p with size %lu", (void*)pa,
                     bin_infos->total_mapping_size);
-                bin_infos->load_bias = (Elf64_Addr)pa;
+                bin_infos->load_bias = (Elf64_Addr)pa + phdr_entry.p_vaddr;
                 bin_infos->allocd_segs[bin_infos->allocd_segs_len++] = pa;  // I am too lazy to explain why this works
             }
         }
@@ -372,9 +371,9 @@ int load_alloc_segments(bin_info_table_T* bin_infos) {
              * *(page_start + page_offset) = segment_data
              */
 
-            const Elf64_Addr page_start = phdr_entry.p_vaddr - phdr_entry.p_vaddr % bin_infos->elf_page_size;
+            page_start = ALIGN_TO_PAGE_DOWN(phdr_entry.p_vaddr, bin_infos->elf_page_size);
             page_offset = phdr_entry.p_vaddr - page_start;
-            const Elf64_Addr mapping_size = page_offset + phdr_entry.p_memsz;
+            mapping_size = page_offset + phdr_entry.p_memsz;
             bin_infos->last_mapping_size = mapping_size;
             bin_infos->allocd_segs_sizes[i] = mapping_size;
 
@@ -401,18 +400,42 @@ int load_alloc_segments(bin_info_table_T* bin_infos) {
             goto ret;
         }
 
+        /*
+         * This logic calculates the address of the current segment, offsets, etc...
+         */
+        if (!first_pt_load && bin_infos->isPIE) {
+            page_start = ALIGN_TO_PAGE_DOWN(bin_infos->load_bias + phdr_entry.p_vaddr, bin_infos->elf_page_size);
+            page_offset = bin_infos->load_bias + phdr_entry.p_vaddr - page_start;
+            mapping_size = (bin_infos->load_bias + page_offset) - page_start;
+        }
+        page_end = ALIGN_TO_PAGE_UP(page_start + phdr_entry.p_memsz, bin_infos->elf_page_size);
+        mapped_pages_size = page_end - page_start;
+
         // read in the segment data from the elf file and write it into the allocated memory of the segment
         if (0 > safe_lseek(bin_infos->elf_fd, phdr_entry.p_offset, SEEK_SET))
             JMP_W_CERROR("Failed to seek in file", ret);
-        if (0 > safe_read(bin_infos->elf_fd, (void*)((Elf64_Addr)pa + page_offset), phdr_entry.p_filesz))
+        if (0 > safe_read(bin_infos->elf_fd, (void*)(page_start + page_offset), phdr_entry.p_filesz))
             JMP_W_CERROR("Failed to read segment from file", ret);
         // memset doesn't return an error, so we assume that this is always successful - idk :)
-        memset_((void*)((Elf64_Addr)pa + page_offset + phdr_entry.p_filesz), 0x00, phdr_entry.p_memsz - phdr_entry.p_filesz);
+        memset_((void*)(page_start + page_offset + phdr_entry.p_filesz), 0x00, phdr_entry.p_memsz - phdr_entry.p_filesz);
 
-        // next set the actual (correct) flags for this memory mapping
+        // next set the actual (correct) flags for this memory mapping by mapping the elf flags to the mmap flags
         const int mmap_seg_prot = (phdr_entry.p_flags & PF_X ? PROT_EXEC : 0) |
             (phdr_entry.p_flags & PF_W ? PROT_WRITE : 0) | (phdr_entry.p_flags & PF_R ? PROT_READ : 0);
-        if (-1 == mprotect(pa, phdr_entry.p_memsz, mmap_seg_prot)) JMP_W_ERROR("memprotect failed", ret);
+
+        /* if we have a PIE, calculate the address for setting the flag as: loading_bias + file offset */
+        // if (bin_infos->isPIE) {
+        //     if (-1 == mprotect((void*)(
+        //         ALIGN_TO_PAGE_DOWN(bin_infos->load_bias + page_offset, bin_infos->elf_page_size)),
+        //         phdr_entry.p_memsz, mmap_seg_prot))
+        //         JMP_W_ERROR("memprotect failed", ret);
+        // }
+        // else {
+        //     /* else use the allocated memory pointer to the just mapped memory region */
+        //     if (-1 == mprotect(pa, phdr_entry.p_memsz, mmap_seg_prot)) JMP_W_ERROR("memprotect failed", ret);
+        // }
+
+        if (-1 == mprotect((void*)page_start, mapped_pages_size, mmap_seg_prot)) JMP_W_ERROR("memprotect failed", ret);
     }
 
     // for non-PIEs, the load bias will be zero
@@ -434,13 +457,17 @@ int create_initial_stack(bin_info_table_T* bin_infos, const int argc, char** arg
     STANDARD_FUNCTION_START;
 
     void* pa;
+    const int stack_flags = PROT_WRITE | PROT_READ;
     /*
      * If the executable is a PIE, the stack was already allocated
      * in memory, so we only have to calculate the beginning of it.
      * The result should be page-aligned.
      */
     if (bin_infos->isPIE) {
-        pa = (void*)(bin_infos->load_bias + bin_infos->initial_user_stack_PIC);
+        pa = (void*) (ALIGN_TO_PAGE_UP(bin_infos->load_bias + bin_infos->initial_user_stack_PIC,
+            bin_infos->elf_page_size));  // page-aligned start of stack
+        // also set the correct permission for the stack
+        if (-1 == mprotect(pa, DEFAULT_STACK_SIZE, stack_flags)) JMP_W_ERROR("memprotect failed", ret);
     }
     else {
         /* Create a new memory mapping for the stack, including argc, argv, etc.
@@ -451,9 +478,10 @@ int create_initial_stack(bin_info_table_T* bin_infos, const int argc, char** arg
          */
         Elf64_Addr new_page_start = (Elf64_Addr) bin_infos->allocd_segs[bin_infos->allocd_segs_len-1];
         new_page_start = new_page_start + bin_infos->last_mapping_size;  // add to the previous addr the mapping size
-        new_page_start = new_page_start + (bin_infos->elf_page_size - new_page_start % bin_infos->elf_page_size);  // make it page aligned
-        pa = mmap((void*)new_page_start, DEFAULT_STACK_SIZE, PROT_WRITE | PROT_READ,
-                MAP_PRIVATE | MAP_ANONYMOUS | MAP_FIXED, -1, 0);
+        // new_page_start = new_page_start + (bin_infos->elf_page_size - new_page_start % bin_infos->elf_page_size);  // make it page aligned
+        new_page_start = ALIGN_TO_PAGE_UP(new_page_start, bin_infos->elf_page_size);  // make it page aligned
+        pa = mmap((void*)new_page_start, DEFAULT_STACK_SIZE, stack_flags,
+                MAP_PRIVATE | MAP_ANONYMOUS | MAP_FIXED_NOREPLACE, -1, 0);
         if (MAP_FAILED == pa) {
             PRINT_CUSTOM_ERROR("Failed to allocate memory at address %p with size %d", (void*)new_page_start, DEFAULT_STACK_SIZE);
             PRINT_ERROR("Error from mmap");
@@ -464,6 +492,9 @@ int create_initial_stack(bin_info_table_T* bin_infos, const int argc, char** arg
                              "Provided addr by mmap: %p vs. calculated addr from hdr: %p", ret, pa, (void*)new_page_start)
         }
     }
+
+    // append pointer to the mapped stack region to the binary information struct for later reference/cleanup
+    bin_infos->initial_user_stack = pa;
 
     /* Create the initial user stack in the new memory mapping manually
      * Layout:
@@ -497,13 +528,13 @@ int create_initial_stack(bin_info_table_T* bin_infos, const int argc, char** arg
         // push all the needed auxiliary vectors
         Elf64_auxv_t* auxv = (Elf64_auxv_t*)_sp;  // define an array for auxv
         int auxv_index = 0;
-        auxv[auxv_index++] = (Elf64_auxv_t){.a_type = AT_PHDR, .a_un = {(uint64_t)bin_infos->phdr_table_vaddr}};
+        auxv[auxv_index++] = (Elf64_auxv_t){.a_type = AT_PHDR, .a_un = {(bin_infos->phdr_table_vaddr)}};
         auxv[auxv_index++] = (Elf64_auxv_t){.a_type = AT_PHENT, .a_un = {bin_infos->elf_header->e_phentsize}};
         auxv[auxv_index++] = (Elf64_auxv_t){.a_type = AT_PHNUM, .a_un = {bin_infos->elf_header->e_phnum}};
         auxv[auxv_index++] = (Elf64_auxv_t){.a_type = AT_PAGESZ, .a_un = {bin_infos->elf_page_size}};
         auxv[auxv_index++] = (Elf64_auxv_t){.a_type = AT_BASE, .a_un = {0x00}};  // we dont have an interpreter
-        auxv[auxv_index++] = (Elf64_auxv_t){.a_type = AT_FLAGS, .a_un = {0x00}};
-        auxv[auxv_index++] = (Elf64_auxv_t){.a_type = AT_ENTRY, .a_un = {bin_infos->elf_header->e_entry}};
+        auxv[auxv_index++] = (Elf64_auxv_t){.a_type = AT_FLAGS, .a_un = {getauxval(AT_FLAGS)}};
+        auxv[auxv_index++] = (Elf64_auxv_t){.a_type = AT_ENTRY, .a_un = {bin_infos->entrypoint}};
         auxv[auxv_index++] = (Elf64_auxv_t){.a_type = AT_UID, .a_un = {getuid()}};
         auxv[auxv_index++] = (Elf64_auxv_t){.a_type = AT_EUID, .a_un = {geteuid()}};
         auxv[auxv_index++] = (Elf64_auxv_t){.a_type = AT_GID, .a_un = {getgid()}};
@@ -514,7 +545,7 @@ int create_initial_stack(bin_info_table_T* bin_infos, const int argc, char** arg
         auxv[auxv_index++] = (Elf64_auxv_t){.a_type = AT_HWCAP2, .a_un = {getauxval(AT_HWCAP2)}};
         auxv[auxv_index++] = (Elf64_auxv_t){.a_type = AT_HWCAP3, .a_un = {getauxval(AT_HWCAP3)}};
         auxv[auxv_index++] = (Elf64_auxv_t){.a_type = AT_HWCAP4, .a_un = {getauxval(AT_HWCAP4)}};
-        auxv[auxv_index++] = (Elf64_auxv_t){.a_type = AT_SECURE, .a_un = {0}};
+        auxv[auxv_index++] = (Elf64_auxv_t){.a_type = AT_SECURE, .a_un = {getauxval(AT_SECURE)}};
         const int auxv_rand_bytes_i = auxv_index;  // save the index to AT_RANDOM to set it later
         auxv[auxv_index++] = (Elf64_auxv_t){.a_type = AT_RANDOM, .a_un = {(uint64_t)0x00}};  // we fill set this later
         auxv[auxv_index++] = (Elf64_auxv_t){.a_type = AT_RSEQ_FEATURE_SIZE, .a_un = {getauxval(AT_RSEQ_FEATURE_SIZE)}};
@@ -522,7 +553,7 @@ int create_initial_stack(bin_info_table_T* bin_infos, const int argc, char** arg
         auxv[auxv_index++] = (Elf64_auxv_t){.a_type = AT_EXECFN, .a_un = {(uint64_t)_sp_argv}};  // ptr to argv[0]
         auxv[auxv_index++] = (Elf64_auxv_t){.a_type = AT_SYSINFO_EHDR, .a_un = {getauxval(AT_SYSINFO_EHDR)}};
         auxv[auxv_index++] = (Elf64_auxv_t){.a_type = AT_MINSIGSTKSZ, .a_un = {getauxval(AT_MINSIGSTKSZ)}};
-        auxv[auxv_index] = (Elf64_auxv_t){.a_type = AT_NULL, .a_un = {0x00}};  // end of auxiliary vector
+        auxv[auxv_index] = (Elf64_auxv_t){.a_type = AT_NULL, .a_un = {0}};  // end of auxiliary vector
 
         _sp = (Elf64_Addr*)((Elf64_Addr)_sp + sizeof(Elf64_auxv_t) * (auxv_index+1));  // move _sp to the end of auxv
         ALIGN_SP(_sp);  // make it aligned to 16
@@ -544,8 +575,6 @@ int create_initial_stack(bin_info_table_T* bin_infos, const int argc, char** arg
         /* stack pointer invalid from here (if needed, _sp = _sp+16) */
 
         auxv[auxv_rand_bytes_i] = (Elf64_auxv_t){.a_type = AT_RANDOM, .a_un = {(uint64_t)random_bytes}};
-
-        bin_infos->initial_user_stack = pa;  // append it to the binary information struct for later reference/cleanup
     }
 
     STANDARD_FUNCTION_RETURN(-EIO);
