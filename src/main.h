@@ -71,7 +71,7 @@ extern ssize_t memcpy_n(void* dest, const void* src);
 
 /* Align an address to a given page up the address range or down */
 #define ALIGN_TO_PAGE_DOWN(ADDR, PAGESIZE) ((ADDR) - (ADDR) % (PAGESIZE))
-#define ALIGN_TO_PAGE_UP(ADDR, PAGESIZE) ((ADDR) + (ADDR) % (PAGESIZE))
+#define ALIGN_TO_PAGE_UP(ADDR, PAGESIZE) ((ADDR) + ((PAGESIZE) - (ADDR) % (PAGESIZE)))
 
 /* This is the standard start of every function - it resets errno
  */
