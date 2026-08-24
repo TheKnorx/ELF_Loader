@@ -4,20 +4,22 @@ A simple implementation of a ELF binary loader, inspired by the
 
 This loader is intended for loading a *simple*\* x86-64 EFI executable that fulfills the following requirements: 
 - statically linked (gcc/ld: `-static`)
-- no a PIE (Position Independent Executable) (gcc: `-fno-PIE -no-pie` / ld explicitly: `-no-pie`)
+- no PIE (Position Independent Executable) at all (gcc: `-fno-PIE -no-pie` / ld explicitly: `-no-pie`)
+- **or** static PIE (gcc: `-fPIE -static-PIE` / ld explicitly: `-static-pie`)
+- no dynamic PIE
 
 \* *simple meaning the more complex the program gets in its operations, the more likely it is for the loader and consequently for the program to fail. Failure might not even occur until after the loader has presumably successfully loaded the program; - don't expect a full-blown, all edge-cases-fixing ELF loader!*
 
 Support for dynamically linked executables (and therefore also for the ELF Interpreter `ld-linux`) or dynamic PIEs is not planned. 
 
-## Planned features
-- Support for static PIEs (`-static-PIE`)
-
 ---
+
+## Commit `f27297c`
+The loader in this and future versions now also supports loading a statically compiled Position-Independent-Executable. The cleanup-situation from before is fixed, (in theory) leaving no memory allocated after the loader transfers control to the loaded process image. 
 
 ## Commit `b3acf13`
 The loader, as provided until this commit, is capable of loading gcc-compiled programs.
-The program does end smoothly after the loaded process ends (due to gcc's exit routines); the caveat with this obviously being that the loader doesn't regain control after jumping into the new program, leaving memory still allocated and file-descriptors still open. This was fixed in later commits.
+The program does end smoothly after the loaded process ends (due to gcc's exit routines); the caveat with this obviously being that the loader doesn't regain control after jumping into the new program, leaving memory still allocated and file-descriptors still open.
 
 This commit yet again represents an even bigger milestone for the project, marking the completion of the foundation of the loader. As for now, every future commit will either be about fine-tuning, edge-case-handling or adding a new feature.
 
