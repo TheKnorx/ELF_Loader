@@ -205,17 +205,15 @@ int open_and_parse_elf(bin_info_table_T* bin_infos, const char* filename) {
 /**
  * Function for allocating or resizing an array by type_s * array_size
  *
- * @param array Pointer to array to allocate/resize
- * @param array_size Current size of the array
- * @param type_s Type that gets stored in the array, so we can calculate the new size
- * @return Returns 0 if successful, en errno code if not successful
+ * @param bin_infos Pointer to data field for storing and retrieving information
+ * @return Returns 0 if successful, an errno code if not successful
  */
-int realloc_array(void** array, const int* array_size, const int type_s) {
+int realloc_segment_array(bin_info_table_T* bin_infos) {
     STANDARD_FUNCTION_START;
 
-    void* new_ptr = realloc(*array, type_s * *array_size);  // (re)alloc the array
+    void* new_ptr = realloc(bin_infos->allocd_segments, sizeof(segment_item_T) * bin_infos->allocd_segs_len);  // (re)alloc the array
     if (NULL == new_ptr) JMP_W_ERROR("Realloc failed", ret);    // check whether realloc failed or not
-    *array = new_ptr;  // assign the new space to the array
+    bin_infos->allocd_segments = new_ptr;  // assign the new space to the array
 
     STANDARD_FUNCTION_RETURN(-ENOMEM)
 }
@@ -314,7 +312,7 @@ int load_alloc_segments(bin_info_table_T* bin_infos) {
             bin_infos->allocd_segs_len++;
 
             // allocate space for the one pointer that will point to the mapped memory region
-            if (0 > realloc_array((void**)&bin_infos->allocd_segments, &bin_infos->allocd_segs_len, sizeof(segment_item_T)))
+            if (0 > realloc_segment_array(bin_infos))
                 JMP_W_CERROR("Realloc failed on segment-mapping-address array", ret)
 
             // set this value early to have correct error handling in case the mapping fails
@@ -358,7 +356,7 @@ int load_alloc_segments(bin_info_table_T* bin_infos) {
         if (!bin_infos->isPIE) {
             // if we found a loadable segment, allocate memory for the struct to store information about it
             bin_infos->allocd_segs_len++;  // increase the length index
-            if (0 > realloc_array((void**)&bin_infos->allocd_segments, &bin_infos->allocd_segs_len, sizeof(segment_item_T)))
+            if (0 > realloc_segment_array(bin_infos))
                 JMP_W_CERROR("Realloc failed on segment-mapping-address array", ret)
             // set this value early to have correct error handling in case the mapping fails
             bin_infos->allocd_segments[bin_infos->allocd_segs_len-1].segment_size = mapping_size;
