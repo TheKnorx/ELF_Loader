@@ -12,6 +12,8 @@ This loader is intended for loading a *simple*\* x86-64 EFI executable that fulf
 
 Support for dynamically linked executables (and therefore also for the ELF Interpreter `ld-linux`) or dynamic PIEs is not planned. 
 
+<br>
+
 ---
 
 ## Commit `f27297c`
@@ -29,7 +31,11 @@ It **DOES NOT** end smoothly after the loaded process ends (process ends with SE
 
 This commit purely marks a milestone for the project: finally being able to see acceptable and visual results of the loaders successful working inner core. 
 
-<br><br>
+<br>
+
+---
+<br>
+
 ### Comment style for C-functions:
 ```C
 /*
@@ -41,3 +47,6 @@ This commit purely marks a milestone for the project: finally being able to see 
 */
 void foo(){...}
 ```
+
+### Debugging
+To enable debugging-messages in the program, pass the DEBUG flag via `-DDEBUG` to the compiler
