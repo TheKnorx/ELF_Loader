@@ -27,7 +27,7 @@ typedef struct bin_info_table_S {
     void*       initial_user_stack_sp;  // points to the beginning (highest address) of the initial user stack
     Elf64_Addr  last_mapping_size;  // holds the last mapping size --> for calculating the next mapping
     int         sys_page_size;      // systems page size as returned by getpagesize()
-    Elf64_Xword elf_page_size;          // page size specified in the elf program headers
+    Elf64_Xword elf_page_size;      // page size specified in the elf program headers
     Elf64_Addr  phdr_table_vaddr;   // virtual address of the process header loaded into memory relative to the first loaded segment
 
     /* PIE vars */
