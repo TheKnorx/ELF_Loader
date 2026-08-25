@@ -81,18 +81,14 @@ extern ssize_t memcpy_n(void* dest, const void* src);
 #define ALIGN_TO_PAGE_DOWN(ADDR, PAGESIZE) ((ADDR) - (ADDR) % (PAGESIZE))
 #define ALIGN_TO_PAGE_UP(ADDR, PAGESIZE) ((ADDR) + ((PAGESIZE) - (ADDR) % (PAGESIZE)))
 
-/* This is the standard start of every function - it resets errno
+/*
+ * This is the standard ending of (some) functions.
+ * On success, return 0. Otherwise, -1
  */
-#define STANDARD_FUNCTION_START errno = 0;
-
-/* This is the standard ending of every function.
- * On success, it returns 0. Otherwise, if errno was set, errno is returned, else RETVAL_DEFAULT is returned
- */
-#define STANDARD_FUNCTION_RETURN(RETVAL_DEFAULT) \
-    return 0;  /* we assume if we came here everything is good */  \
-    ret:  \
-    if (!errno) return RETVAL_DEFAULT;  /* if errno is cleared, RETVAL_DEFAULT */  \
-    return -errno;  /* else return errno */  \
+#define STANDARD_FUNCTION_RETURN \
+    return 0;   /* we assume, if we came here, everything is good, so return 0 */  \
+    ret:        /* if we came here, something went wrong */  \
+    return -1;  /* and therefore, return -1 */
 
 
 /** Constants */

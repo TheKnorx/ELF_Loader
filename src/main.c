@@ -1,3 +1,5 @@
+// ToDo: Check the return value of all safe_lseek function calls
+
 #define _FILE_OFFSET_BITS 64
 // Includes
 #include <stdio.h>
@@ -40,35 +42,39 @@ typedef struct bin_info_table_S {
     Elf64_Addr  initial_user_stack_PIC; // points to the user stack relative to the PIE-base
 } bin_info_table_T;
 
+typedef signed long long big_off_T;
+
 /**
- * Function for seeking with offsets of greater length than `long', namely up to an offsets of type `Elf64_Off'
+ * Function for seeking with offsets of greater length than `signed long',
+ * namely up to an offsets of type `Elf64_Off' (`unsigned long`).
+ * The distance that was seeked is returned as a `signed long long int`.
  *
  * @param fd File descriptor for file to seek in
  * @param offset Offset to seek within the file
  * @param whence Position to begin seeking in the file
- * @return Returns 0 if successful, an errno code if not successful
+ * @return Returns seeked distance if successful, -1 if not successful
  */
-long long int safe_lseek(const int fd, Elf64_Off offset, int whence) {
-    STANDARD_FUNCTION_START
+big_off_T safe_lseek(const int fd, Elf64_Off offset, int whence) {
+    big_off_T distance = 0;  // seeked distance - we need it signed so we have to make it twice as big
 
     // First have this lseek block so we can use the whence as a starting point
     if (offset > LONG_MAX) {
-        if (0 > lseek(fd, LONG_MAX, whence)) JMP_W_ERROR("Initial lseek failed", ret);
+        if (-1 == (distance += lseek(fd, LONG_MAX, whence))) JMP_W_ERROR("Initial lseek failed", ret);
         offset -= LONG_MAX;
         whence = SEEK_CUR;
     }
 
     // Next, while the offset is still greater than LONG_MAX, seek with LONG_MAX until its less or equal than LONG_MAX
     while (offset > LONG_MAX) {
-        if (0 > lseek(fd, LONG_MAX, whence)) JMP_W_ERROR("Iterative lseek failed", ret);
+        if (-1 == (distance += lseek(fd, LONG_MAX, whence))) JMP_W_ERROR("Iterative lseek failed", ret);
         offset -= LONG_MAX;
     }
 
     // Finally, the offset the less or equal to LONG_MAX so we seek with the offset that is left (cast to a long)
-    if (0 > lseek(fd, (long)offset, whence)) JMP_W_ERROR("Closing lseek failed", ret);
+    if (-1 == (distance += lseek(fd, (long)offset, whence))) JMP_W_ERROR("Closing lseek failed", ret);
 
-    // Just return -errno in any case as we don't have any other instructions that would need a retval themselves
-    STANDARD_FUNCTION_RETURN(-errno);
+    ret:
+    return distance;
 }
 
 /**
@@ -76,23 +82,27 @@ long long int safe_lseek(const int fd, Elf64_Off offset, int whence) {
  * Important: The current file position is not altered! The bytes read are not returned!
  * It also checks the result of the read and throws an error if necessary.
  * (Packing this into its own functions to avoid code duplication.)
+ * However, the function still returns the amount of bytes read from the file.
  *
  * @param fd File descriptor
  * @param buf Buffer to write things into
  * @param nbytes Number of bytes to read from the file
- * @return Returns 0 if successful, an errno code if not successful
+ * @return Returns amount of read bytes if successful, -1 if not successful
  */
-int safe_read(const int fd, void* buf, const size_t nbytes) {
-    STANDARD_FUNCTION_START;
+ssize_t safe_read(const int fd, void* buf, const size_t nbytes) {
+    ssize_t read_result = -1;
 
-    const long long int cur_fpos = safe_lseek(fd, 0, SEEK_CUR);  // get the current file position to restore it later
-    const ssize_t read_result = read(fd, buf, nbytes);
+    const big_off_T cur_fpos = safe_lseek(fd, 0, SEEK_CUR);  // get the current file position to restore it later
+    if (-1 == cur_fpos) JMP_W_CERROR("Safe lseek failed during begin of doing a safe read", ret);
+    read_result = read(fd, buf, nbytes);
     if (!read_result) JMP_W_CERROR("Unexpectedly reached EOF", ret);
     if (-1 == read_result || nbytes != (Elf64_Xword)read_result)
         JMP_W_ERROR("Failed to read segment from file", ret);
-    safe_lseek(fd, cur_fpos, SEEK_SET);
+    if (-1 == safe_lseek(fd, cur_fpos, SEEK_SET))
+        JMP_W_CERROR("Safe lseek failed during end of doing a safe read", ret);
 
-    STANDARD_FUNCTION_RETURN(-EIO);
+    ret:
+    return read_result;
 }
 
 /**
@@ -103,7 +113,7 @@ int safe_read(const int fd, void* buf, const size_t nbytes) {
  * @param hdr_t_size Size of the table
  * @param hdr_t_ent Amount of entries in the table
  * @param hdr_t_ptr Address to pointer to location to store the allocated space for the header table
- * @return Returns 0 if successful, an errno code if not successful
+ * @return Returns 0 if successful, -1 if not successful
  */
 int get_header_table(
     const bin_info_table_T* bin_infos,
@@ -112,8 +122,6 @@ int get_header_table(
     const Elf64_Half hdr_t_ent,
     void** hdr_t_ptr  /* we use a void* here cause we have to except multiple different pointer types */
     ) {
-    STANDARD_FUNCTION_START;
-
     // define whether we handle a section header or a program header
     const char* hdr_t_type = bin_infos->elf_header->e_phoff == offset ? "program" : "section";
 
@@ -123,7 +131,7 @@ int get_header_table(
     if (offset > bin_infos->elf_file_size) JMP_W_CERROR("%s header table is beyond EOF", ret, hdr_t_type);
 
     // next get the header table
-    if (0 > safe_lseek(bin_infos->elf_fd, offset, SEEK_SET))
+    if (-1 == safe_lseek(bin_infos->elf_fd, offset, SEEK_SET))
         JMP_W_CERROR("Failed to seek in file", ret);
 
     const Elf64_Word phdrtsize = hdr_t_size * hdr_t_ent;
@@ -133,11 +141,12 @@ int get_header_table(
         JMP_W_ERROR("Detailed allocation error", ret);
     }
     // read the header from the elf file and check, if we got all the bytes
-    if (0 > safe_read(bin_infos->elf_fd, hdr_buffer, phdrtsize))
+    if (-1 == safe_read(bin_infos->elf_fd, hdr_buffer, phdrtsize))
         JMP_W_CERROR("Failed to read the %s header table", ret, hdr_t_type);
 
     *hdr_t_ptr = hdr_buffer;
-    STANDARD_FUNCTION_RETURN(-EIO);
+
+    STANDARD_FUNCTION_RETURN;
 }
 
 /**
@@ -147,11 +156,10 @@ int get_header_table(
  *
  * @param bin_infos Pointer to data field for storing and retrieving information
  * @param filename Path to and Filename of the ELF binary
- * @return Returns 0 if successful, an errno code if not successful
+ * @return Returns 0 if successful, -1 if not successful
  */
 int open_and_parse_elf(bin_info_table_T* bin_infos, const char* filename) {
     DEBUG("Parsing elf file");
-    STANDARD_FUNCTION_START;
 
     // create a stdio file obj to the elf binary
     const int elf_fd = open(filename, O_RDONLY);
@@ -167,7 +175,7 @@ int open_and_parse_elf(bin_info_table_T* bin_infos, const char* filename) {
     Elf64_Ehdr* elf_header = calloc(1, ELF_HEADER_SIZE);
     if (NULL == elf_header) JMP_W_CERROR("Failed to allocate space for the efi-header-buffer", ret);
     bin_infos->elf_header = elf_header;
-    if (0 > safe_read(elf_fd, elf_header, ELF_HEADER_SIZE))
+    if (-1 == safe_read(elf_fd, elf_header, ELF_HEADER_SIZE))
         JMP_W_CERROR("Failed to read the elf header", ret);
 
     /* Do consistency-checks to make sure it's an actual ELF file and also if we can process it */
@@ -194,28 +202,26 @@ int open_and_parse_elf(bin_info_table_T* bin_infos, const char* filename) {
     bin_infos->entrypoint = elf_header->e_entry;  // this could be zero --> PIE
 
     // next get the program header table if it exists
-    if (0 > get_header_table(bin_infos, elf_header->e_phoff, elf_header->e_phentsize,
+    if (get_header_table(bin_infos, elf_header->e_phoff, elf_header->e_phentsize,
                         elf_header->e_phnum, (void*)&bin_infos->prog_header_table)) {
         JMP_W_CERROR("Failed to load program header table", ret)
     }
 
-    STANDARD_FUNCTION_RETURN(-ENOEXEC);
+    STANDARD_FUNCTION_RETURN;
 }
 
 /**
- * Function for allocating or resizing an array by type_s * array_size
+ * Function for allocating or resizing the segment array in the binary_infos struct
  *
  * @param bin_infos Pointer to data field for storing and retrieving information
- * @return Returns 0 if successful, an errno code if not successful
+ * @return Returns 0 if successful, -1 if not successful
  */
 int realloc_segment_array(bin_info_table_T* bin_infos) {
-    STANDARD_FUNCTION_START;
-
     void* new_ptr = realloc(bin_infos->allocd_segments, sizeof(segment_item_T) * bin_infos->allocd_segs_len);  // (re)alloc the array
     if (NULL == new_ptr) JMP_W_ERROR("Realloc failed", ret);    // check whether realloc failed or not
     bin_infos->allocd_segments = new_ptr;  // assign the new space to the array
 
-    STANDARD_FUNCTION_RETURN(-ENOMEM)
+    STANDARD_FUNCTION_RETURN;
 }
 
 /**
@@ -223,10 +229,11 @@ int realloc_segment_array(bin_info_table_T* bin_infos) {
  * biggest alignment/the biggest page size needed by the program.
  *
  * This function does maybe call itself recursively, if the page size changed
- * because of its calculations.
+ * because of its calculations. But this should happen only once!
  *
  * @param bin_infos Pointer to data field for storing and retrieving information
  * @param default_page_sz The default page size to use for calculations
+ * @return -
  */
 void calc_phdr_vals(bin_info_table_T* bin_infos, const Elf64_Xword default_page_sz) {
     unsigned long min_addr = -1;
@@ -264,11 +271,9 @@ void calc_phdr_vals(bin_info_table_T* bin_infos, const Elf64_Xword default_page_
  * and mapping all the relevant segments into the virtual address space of the new process
  *
  * @param bin_infos Pointer to data field for storing and retrieving information
- * @return Returns 0 if successful, an errno code if not successful
+ * @return Returns 0 if successful, -1 if not successful
  */
 int load_alloc_segments(bin_info_table_T* bin_infos) {
-    STANDARD_FUNCTION_START;
-
     // calculate the biggest alignment and the total mapping size
     calc_phdr_vals(bin_infos, bin_infos->sys_page_size);
 
@@ -312,7 +317,7 @@ int load_alloc_segments(bin_info_table_T* bin_infos) {
             bin_infos->allocd_segs_len++;
 
             // allocate space for the one pointer that will point to the mapped memory region
-            if (0 > realloc_segment_array(bin_infos))
+            if (realloc_segment_array(bin_infos))
                 JMP_W_CERROR("Realloc failed on segment-mapping-address array", ret)
 
             // set this value early to have correct error handling in case the mapping fails
@@ -356,7 +361,7 @@ int load_alloc_segments(bin_info_table_T* bin_infos) {
         if (!bin_infos->isPIE) {
             // if we found a loadable segment, allocate memory for the struct to store information about it
             bin_infos->allocd_segs_len++;  // increase the length index
-            if (0 > realloc_segment_array(bin_infos))
+            if (realloc_segment_array(bin_infos))
                 JMP_W_CERROR("Realloc failed on segment-mapping-address array", ret)
             // set this value early to have correct error handling in case the mapping fails
             bin_infos->allocd_segments[bin_infos->allocd_segs_len-1].segment_size = mapping_size;
@@ -388,9 +393,9 @@ int load_alloc_segments(bin_info_table_T* bin_infos) {
         }
 
         // read in the segment data from the elf file and write it into the allocated memory of the segment
-        if (0 > safe_lseek(bin_infos->elf_fd, phdr_entry.p_offset, SEEK_SET))
+        if (-1 == safe_lseek(bin_infos->elf_fd, phdr_entry.p_offset, SEEK_SET))
             JMP_W_CERROR("Failed to seek in file", ret);
-        if (0 > safe_read(bin_infos->elf_fd, (void*)(page_start + page_offset), phdr_entry.p_filesz))
+        if (-1 == safe_read(bin_infos->elf_fd, (void*)(page_start + page_offset), phdr_entry.p_filesz))
             JMP_W_CERROR("Failed to read segment from file", ret);
         // memset doesn't return an error, so we assume that this is always successful - idk :)
         memset_((void*)(page_start + page_offset + phdr_entry.p_filesz), 0x00, phdr_entry.p_memsz - phdr_entry.p_filesz);
@@ -405,7 +410,7 @@ int load_alloc_segments(bin_info_table_T* bin_infos) {
     bin_infos->entrypoint += bin_infos->load_bias;
     bin_infos->phdr_table_vaddr += bin_infos->load_bias;
 
-    STANDARD_FUNCTION_RETURN(-EIO);
+    STANDARD_FUNCTION_RETURN;
 }
 
 /**
@@ -414,11 +419,9 @@ int load_alloc_segments(bin_info_table_T* bin_infos) {
  * @param bin_infos Pointer to data field for storing and retrieving information
  * @param argc The length of argv
  * @param argv The argv to pass to the new process
- * @return Returns 0 if successful, an errno code if not successful
+ * @return Returns 0 if successful, -1 if not successful
  */
 int create_initial_stack(bin_info_table_T* bin_infos, const int argc, char** argv) {
-    STANDARD_FUNCTION_START;
-
     void* pa;
     constexpr int stack_flags = PROT_WRITE | PROT_READ;
     /*
@@ -474,7 +477,8 @@ int create_initial_stack(bin_info_table_T* bin_infos, const int argc, char** arg
     * Set the auxiliary vector (auxv) pairs according to the elf file and our environment and
     * the kernel/machine specific auxv pairs according to what the kernel did pass to this loader
     */
-    {/* We need this block to have the variable-length-array out of scope for the goto's;
+    {
+        /* We need this block to have the variable-length-array out of scope for the goto's;
         Otherwise gcc gives us an error, cause apparently its illegal to have a goto jmp into the scope of a VLA */
         // define kind of a stack pointer (of type XWord cause it points to raw data), 7 MiB into stack memory
         Elf64_Xword* _sp = (Elf64_Xword*)((Elf64_Xword)pa+1024*1024*7);
@@ -539,7 +543,7 @@ int create_initial_stack(bin_info_table_T* bin_infos, const int argc, char** arg
         auxv[auxv_rand_bytes_i] = (Elf64_auxv_t){.a_type = AT_RANDOM, .a_un = {(uint64_t)random_bytes}};
     }
 
-    STANDARD_FUNCTION_RETURN(-EIO);
+    STANDARD_FUNCTION_RETURN;
 }
 
 /**
@@ -593,11 +597,11 @@ int main(const int argc, char **argv) {
     bin_info_table_T binary_infos = {0};  // initialize everything to zero
     binary_infos.sys_page_size = getpagesize();
 
-    if (0 > open_and_parse_elf(&binary_infos, argv[1])) JMP_W_CERROR("Failed to load ELF header", on_error);
+    if (open_and_parse_elf(&binary_infos, argv[1])) JMP_W_CERROR("Failed to load ELF header", on_error);
 
-    if (0 > load_alloc_segments(&binary_infos)) JMP_W_CERROR("Failed to load segments", on_error);
+    if (load_alloc_segments(&binary_infos)) JMP_W_CERROR("Failed to load segments", on_error);
 
-    if (0 > create_initial_stack(&binary_infos, argc-1, argv+1)) JMP_W_CERROR("Failed to create initial stack", on_error);
+    if (create_initial_stack(&binary_infos, argc-1, argv+1)) JMP_W_CERROR("Failed to create initial stack", on_error);
 
     loader_cleanup(&binary_infos);
 
