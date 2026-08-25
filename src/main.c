@@ -301,17 +301,6 @@ int load_alloc_segments(bin_info_table_T* bin_infos) {
         }
 
         /*
-         * Define some variables that we need later on, but who's values will be
-         * different depending on the type of executable (PIE/no PIE) that is loaded.
-         * Those have to be initialized with some value to shut up clion.
-         */
-        Elf64_Addr page_offset = 0;
-        Elf64_Addr page_start = 0;
-        Elf64_Addr page_end = 0;
-        Elf64_Addr mapping_size = 0;
-        Elf64_Addr mapped_pages_size = 0;  // size of the currently mapped page(es)
-
-        /*
          * If the executable is a (static) PIE, we allocate
          * the whole mapping at once. This is only possible
          * with PIEs. For detailed explanation see kernel function
@@ -319,7 +308,6 @@ int load_alloc_segments(bin_info_table_T* bin_infos) {
          */
         if (first_pt_load && bin_infos->isPIE) {
             first_pt_load = false;  //
-            //bin_infos->last_mapping_size = bin_infos->total_mapping_size; // set this for possible future error messages to work
 
             // allocate space for the one pointer that will point to the mapped memory region
             if (NULL == (bin_infos->allocd_segs = calloc(1, POINTER_SIZE)))
@@ -346,9 +334,26 @@ int load_alloc_segments(bin_info_table_T* bin_infos) {
                 bin_infos->allocd_segs[bin_infos->allocd_segs_len++] = pa;  // I am too lazy to explain why this works
             }
         }
-        else if (!bin_infos->isPIE) {
-            /* If it's a normal executable, map every segment separately */
 
+        /* Next calculate the correct page start, page end, offset and the mapping-size
+         * Calculate the start of the page in which the next segment resides:
+         * page_start = ALIGN_TO_PAGE_DOWN(load_bias + vaddr, align)
+         * --> so now page_start % align = 0
+         *
+         * Calculate the offset to where the segment will be written within the page and the size of the mapping:
+         * page_offset = load_bias + p_vaddr - page_start
+         * mapping_size = load_bias + page_offset + p_memsz
+         *
+         * Now the data of the segment can be written into the page at:
+         * *(page_start + page_offset) = segment_data
+         */
+        const Elf64_Addr page_start = ALIGN_TO_PAGE_DOWN(bin_infos->load_bias + phdr_entry.p_vaddr, bin_infos->elf_page_size);
+        const Elf64_Addr page_offset = bin_infos->load_bias + phdr_entry.p_vaddr - page_start;
+        const Elf64_Addr mapping_size = page_offset + phdr_entry.p_memsz;
+        bin_infos->last_mapping_size = mapping_size;
+
+        /* If it's a normal executable, map every segment separately */
+        if (!bin_infos->isPIE) {
             // if we found a loadable segment, allocate memory for the pointer to store it into the array
             bin_infos->allocd_segs_len++;  // increase the length index
             if (0 > realloc_array((void**)&bin_infos->allocd_segs, &bin_infos->allocd_segs_len, POINTER_SIZE))
@@ -358,23 +363,6 @@ int load_alloc_segments(bin_info_table_T* bin_infos) {
             if (0 > realloc_array((void**)&bin_infos->allocd_segs_sizes, &bin_infos->allocd_segs_len, sizeof(Elf64_Addr)))
                 JMP_W_CERROR("Realloc failed on segment-mapping-sizes array", ret)
 
-            /* Next calculate the correct page start, map it, and write the segment into the correct offset
-             * Calculate the start of the page in which the next segment resides:
-             * page_start = vaddr - (vaddr - align)
-             * --> so now page_start % align = 0
-             *
-             * Calculate the offset to where the segment will be written within the page and the size of the mapping:
-             * page_offset = p_vaddr - page_start
-             * mapping_size = page_offset + p_memsz
-             *
-             * Now the data of the segment can be written into the page at:
-             * *(page_start + page_offset) = segment_data
-             */
-
-            page_start = ALIGN_TO_PAGE_DOWN(phdr_entry.p_vaddr, bin_infos->elf_page_size);
-            page_offset = phdr_entry.p_vaddr - page_start;
-            mapping_size = page_offset + phdr_entry.p_memsz;
-            bin_infos->last_mapping_size = mapping_size;
             bin_infos->allocd_segs_sizes[i] = mapping_size;
 
             /* map the corresponding memory region */
@@ -400,17 +388,6 @@ int load_alloc_segments(bin_info_table_T* bin_infos) {
             goto ret;
         }
 
-        /*
-         * This logic calculates the address of the current segment, offsets, etc...
-         */
-        if (!first_pt_load && bin_infos->isPIE) {
-            page_start = ALIGN_TO_PAGE_DOWN(bin_infos->load_bias + phdr_entry.p_vaddr, bin_infos->elf_page_size);
-            page_offset = bin_infos->load_bias + phdr_entry.p_vaddr - page_start;
-            mapping_size = (bin_infos->load_bias + page_offset) - page_start;
-        }
-        page_end = ALIGN_TO_PAGE_UP(page_start + phdr_entry.p_memsz, bin_infos->elf_page_size);
-        mapped_pages_size = page_end - page_start;
-
         // read in the segment data from the elf file and write it into the allocated memory of the segment
         if (0 > safe_lseek(bin_infos->elf_fd, phdr_entry.p_offset, SEEK_SET))
             JMP_W_CERROR("Failed to seek in file", ret);
@@ -422,23 +399,10 @@ int load_alloc_segments(bin_info_table_T* bin_infos) {
         // next set the actual (correct) flags for this memory mapping by mapping the elf flags to the mmap flags
         const int mmap_seg_prot = (phdr_entry.p_flags & PF_X ? PROT_EXEC : 0) |
             (phdr_entry.p_flags & PF_W ? PROT_WRITE : 0) | (phdr_entry.p_flags & PF_R ? PROT_READ : 0);
-
-        /* if we have a PIE, calculate the address for setting the flag as: loading_bias + file offset */
-        // if (bin_infos->isPIE) {
-        //     if (-1 == mprotect((void*)(
-        //         ALIGN_TO_PAGE_DOWN(bin_infos->load_bias + page_offset, bin_infos->elf_page_size)),
-        //         phdr_entry.p_memsz, mmap_seg_prot))
-        //         JMP_W_ERROR("memprotect failed", ret);
-        // }
-        // else {
-        //     /* else use the allocated memory pointer to the just mapped memory region */
-        //     if (-1 == mprotect(pa, phdr_entry.p_memsz, mmap_seg_prot)) JMP_W_ERROR("memprotect failed", ret);
-        // }
-
-        if (-1 == mprotect((void*)page_start, mapped_pages_size, mmap_seg_prot)) JMP_W_ERROR("memprotect failed", ret);
+        if (-1 == mprotect((void*)page_start, mapping_size, mmap_seg_prot)) JMP_W_ERROR("memprotect failed", ret);
     }
 
-    // for non-PIEs, the load bias will be zero
+    // for non-PIEs, the load bias will be zero; for PIEs it will contain the address of the start of the image base
     bin_infos->entrypoint += bin_infos->load_bias;
     bin_infos->phdr_table_vaddr += bin_infos->load_bias;
 
@@ -457,7 +421,7 @@ int create_initial_stack(bin_info_table_T* bin_infos, const int argc, char** arg
     STANDARD_FUNCTION_START;
 
     void* pa;
-    const int stack_flags = PROT_WRITE | PROT_READ;
+    constexpr int stack_flags = PROT_WRITE | PROT_READ;
     /*
      * If the executable is a PIE, the stack was already allocated
      * in memory, so we only have to calculate the beginning of it.
@@ -470,15 +434,13 @@ int create_initial_stack(bin_info_table_T* bin_infos, const int argc, char** arg
         if (-1 == mprotect(pa, DEFAULT_STACK_SIZE, stack_flags)) JMP_W_ERROR("memprotect failed", ret);
     }
     else {
-        /* Create a new memory mapping for the stack, including argc, argv, etc.
-         * For that we calculate the beginning of the next page starting from the last memory mapping
-         * By doing that here, we have some code duplication but this is inevitable
-         * We assume that the program header entry variable (phdr_entry) is already initialized
-         * We also assume that the address of the last mapped section is already page aligned (- it has to be)
+        /*
+         * If the executable is not a PIE, calculate the beginning of the next page
+         * starting from the last memory mapping. By doing that here, we have some code
+         * duplication but this is inevitable
          */
         Elf64_Addr new_page_start = (Elf64_Addr) bin_infos->allocd_segs[bin_infos->allocd_segs_len-1];
         new_page_start = new_page_start + bin_infos->last_mapping_size;  // add to the previous addr the mapping size
-        // new_page_start = new_page_start + (bin_infos->elf_page_size - new_page_start % bin_infos->elf_page_size);  // make it page aligned
         new_page_start = ALIGN_TO_PAGE_UP(new_page_start, bin_infos->elf_page_size);  // make it page aligned
         pa = mmap((void*)new_page_start, DEFAULT_STACK_SIZE, stack_flags,
                 MAP_PRIVATE | MAP_ANONYMOUS | MAP_FIXED_NOREPLACE, -1, 0);
