@@ -17,7 +17,7 @@
 typedef struct bin_info_table_S {
     Elf64_Addr  entrypoint;         // this maybe zero --> PIE
     int         elf_fd;             // file stream of the ELF file
-    __u_long    elf_file_size;      // size of the complete efi file
+    __uint64_t  elf_file_size;      // size of the complete efi file
     Elf64_Ehdr* elf_header;         // pointer to allocated memory storing the elf header
     Elf64_Phdr* prog_header_table;  // pointer to allocated memory storing the program header table
     int         allocd_segs_len;    // len of allocd_segs array
