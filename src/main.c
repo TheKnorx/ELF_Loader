@@ -16,7 +16,7 @@
 
 typedef struct segment_item_S {
     void*       segment_ptr;    // pointer to mapped segment
-    __uint64_t  segment_size;    // size of mapped segment in memory
+    __uint64_t  segment_size;   // size of mapped segment in memory
 } segment_item_T;
 
 typedef struct bin_info_table_S {
@@ -26,7 +26,7 @@ typedef struct bin_info_table_S {
     Elf64_Ehdr* elf_header;         // pointer to allocated memory storing the elf header
     Elf64_Phdr* prog_header_table;  // pointer to allocated memory storing the program header table
     int         allocd_segs_len;    // len of allocd_segs array
-    segment_item_T* allocd_segments;  // array of pointers to segment_item_T structs
+    segment_item_T* allocd_segments;    // array of pointers to segment_item_T structs
     void*       initial_user_stack; // points to the beginning (lowest address) of the memory of the stack
     void*       initial_user_stack_sp;  // points to the beginning (highest address) of the initial user stack
     int         sys_page_size;      // systems page size as returned by getpagesize()
