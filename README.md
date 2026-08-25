@@ -16,6 +16,8 @@ Support for dynamically linked executables (and therefore also for the ELF Inter
 
 ---
 
+<br>
+
 ## Commit `f27297c`
 The loader in this and future versions now also supports loading a statically compiled Position-Independent-Executable. The cleanup-situation from before is fixed, (in theory) leaving no memory allocated after the loader transfers control to the loaded process image. 
 
@@ -34,6 +36,7 @@ This commit purely marks a milestone for the project: finally being able to see 
 <br>
 
 ---
+
 <br>
 
 ### Comment style for C-functions:
