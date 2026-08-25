@@ -14,6 +14,11 @@
 
 #include "main.h"
 
+typedef struct segment_item_S {
+    void*       segment_ptr;    // pointer to mapped segment
+    __uint64_t  segment_size;    // size of mapped segment in memory
+} segment_item_T;
+
 typedef struct bin_info_table_S {
     Elf64_Addr  entrypoint;         // this maybe zero --> PIE
     int         elf_fd;             // file stream of the ELF file
@@ -21,8 +26,7 @@ typedef struct bin_info_table_S {
     Elf64_Ehdr* elf_header;         // pointer to allocated memory storing the elf header
     Elf64_Phdr* prog_header_table;  // pointer to allocated memory storing the program header table
     int         allocd_segs_len;    // len of allocd_segs array
-    void**      allocd_segs;        // array of pointer to allocated segments
-    Elf64_Xword* allocd_segs_sizes; // len of each allocd_segs mapping
+    segment_item_T* allocd_segments;  // array of pointers to segment_item_T structs
     void*       initial_user_stack; // points to the beginning (lowest address) of the memory of the stack
     void*       initial_user_stack_sp;  // points to the beginning (highest address) of the initial user stack
     Elf64_Addr  last_mapping_size;  // holds the last mapping size --> for calculating the next mapping
@@ -310,12 +314,8 @@ int load_alloc_segments(bin_info_table_T* bin_infos) {
             first_pt_load = false;  //
 
             // allocate space for the one pointer that will point to the mapped memory region
-            if (NULL == (bin_infos->allocd_segs = calloc(1, POINTER_SIZE)))
+            if (NULL == (bin_infos->allocd_segments = calloc(1, sizeof(segment_item_T))))
                 JMP_W_CERROR("Realloc failed on segment-mapping-address array", ret)
-
-            // allocate space for the one pointer that will point to the size of the mapped region
-            bin_infos->allocd_segs_sizes = calloc(1, sizeof(Elf64_Xword));
-            bin_infos->allocd_segs_sizes[0] = bin_infos->total_mapping_size;
 
             /*
              * Map the whole virtual memory of the program image.
@@ -331,7 +331,10 @@ int load_alloc_segments(bin_info_table_T* bin_infos) {
                 DEBUG("Successfully created memory mapping at address %p with size %lu", (void*)pa,
                     bin_infos->total_mapping_size);
                 bin_infos->load_bias = (Elf64_Addr)pa + phdr_entry.p_vaddr;
-                bin_infos->allocd_segs[bin_infos->allocd_segs_len++] = pa;  // I am too lazy to explain why this works
+                bin_infos->allocd_segments[0] = (segment_item_T){
+                    .segment_ptr = pa, .segment_size = bin_infos->total_mapping_size
+                };
+                bin_infos->allocd_segs_len++;
             }
         }
 
@@ -354,16 +357,10 @@ int load_alloc_segments(bin_info_table_T* bin_infos) {
 
         /* If it's a normal executable, map every segment separately */
         if (!bin_infos->isPIE) {
-            // if we found a loadable segment, allocate memory for the pointer to store it into the array
+            // if we found a loadable segment, allocate memory for the struct to store information about it
             bin_infos->allocd_segs_len++;  // increase the length index
-            if (0 > realloc_array((void**)&bin_infos->allocd_segs, &bin_infos->allocd_segs_len, POINTER_SIZE))
+            if (0 > realloc_array((void**)&bin_infos->allocd_segments, &bin_infos->allocd_segs_len, sizeof(segment_item_T)))
                 JMP_W_CERROR("Realloc failed on segment-mapping-address array", ret)
-
-            // also (re)alloc the segment-mapping-sizes array
-            if (0 > realloc_array((void**)&bin_infos->allocd_segs_sizes, &bin_infos->allocd_segs_len, sizeof(Elf64_Addr)))
-                JMP_W_CERROR("Realloc failed on segment-mapping-sizes array", ret)
-
-            bin_infos->allocd_segs_sizes[i] = mapping_size;
 
             /* map the corresponding memory region */
             // always set the protection of the mapping to write, cause we still have to write the segment data
@@ -371,7 +368,9 @@ int load_alloc_segments(bin_info_table_T* bin_infos) {
                 MAP_PRIVATE | MAP_ANONYMOUS | MAP_FIXED, -1, 0);
 
             if (MAP_FAILED != pa) {
-                bin_infos->allocd_segs[bin_infos->allocd_segs_len-1] = pa;
+                bin_infos->allocd_segments[bin_infos->allocd_segs_len-1] = (segment_item_T){
+                    .segment_ptr = pa, .segment_size = mapping_size
+                };
                 if (pa != (void*)page_start)
                     JMP_W_CERROR("Failed to allocate memory for segment at correct address. \n"
                                  "Provided addr by mmap: %p vs. calculated addr from hdr: %p", ret, pa, (void*)page_start)
@@ -383,7 +382,7 @@ int load_alloc_segments(bin_info_table_T* bin_infos) {
 
         if (MAP_FAILED == pa) {
             PRINT_CUSTOM_ERROR("Failed to allocate memory at address %p with size %lu",
-                bin_infos->allocd_segs[bin_infos->allocd_segs_len-1], bin_infos->last_mapping_size);
+                bin_infos->allocd_segments[bin_infos->allocd_segs_len-1].segment_ptr, bin_infos->last_mapping_size);
             PRINT_ERROR("Error from mmap");
             goto ret;
         }
@@ -439,7 +438,7 @@ int create_initial_stack(bin_info_table_T* bin_infos, const int argc, char** arg
          * starting from the last memory mapping. By doing that here, we have some code
          * duplication but this is inevitable
          */
-        Elf64_Addr new_page_start = (Elf64_Addr) bin_infos->allocd_segs[bin_infos->allocd_segs_len-1];
+        Elf64_Addr new_page_start = (Elf64_Addr) bin_infos->allocd_segments[bin_infos->allocd_segs_len-1].segment_ptr;
         new_page_start = new_page_start + bin_infos->last_mapping_size;  // add to the previous addr the mapping size
         new_page_start = ALIGN_TO_PAGE_UP(new_page_start, bin_infos->elf_page_size);  // make it page aligned
         pa = mmap((void*)new_page_start, DEFAULT_STACK_SIZE, stack_flags,
@@ -553,10 +552,8 @@ void loader_cleanup(bin_info_table_T* bin_infos) {
     bin_infos->prog_header_table = nullptr;
     free(bin_infos->elf_header);
     bin_infos->elf_header = nullptr;
-    free(bin_infos->allocd_segs);
-    bin_infos->allocd_segs = nullptr;
-    free(bin_infos->allocd_segs_sizes);
-    bin_infos->allocd_segs_sizes = nullptr;
+    free(bin_infos->allocd_segments);
+    bin_infos->allocd_segments = nullptr;
     close(bin_infos->elf_fd);  // if this fails, we just ignore it
     bin_infos->elf_fd = -1;
 }
@@ -568,9 +565,10 @@ void loader_cleanup(bin_info_table_T* bin_infos) {
  */
 void proc_img_cleanup(const bin_info_table_T* bin_infos) {
     DEBUG("Cleaning up new process image")
-    if (nullptr == bin_infos->allocd_segs) goto allocd_segs_free_end;
+    if (nullptr == bin_infos->allocd_segments) goto allocd_segs_free_end;
     for (int i = 0; i<bin_infos->allocd_segs_len; i++) {
-        if (MAP_FAILED != bin_infos->allocd_segs[i]) munmap(bin_infos->allocd_segs[i], bin_infos->allocd_segs_sizes[i]);
+        if (MAP_FAILED != bin_infos->allocd_segments[i].segment_ptr)
+            munmap(bin_infos->allocd_segments[i].segment_ptr, bin_infos->allocd_segments[i].segment_size);
     }
     allocd_segs_free_end:
     if (MAP_FAILED != bin_infos->initial_user_stack) munmap(bin_infos->initial_user_stack, sizeof(void*));
