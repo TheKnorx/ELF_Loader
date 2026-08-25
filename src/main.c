@@ -29,7 +29,6 @@ typedef struct bin_info_table_S {
     segment_item_T* allocd_segments;  // array of pointers to segment_item_T structs
     void*       initial_user_stack; // points to the beginning (lowest address) of the memory of the stack
     void*       initial_user_stack_sp;  // points to the beginning (highest address) of the initial user stack
-    Elf64_Addr  last_mapping_size;  // holds the last mapping size --> for calculating the next mapping
     int         sys_page_size;      // systems page size as returned by getpagesize()
     Elf64_Xword elf_page_size;      // page size specified in the elf program headers
     Elf64_Addr  phdr_table_vaddr;   // virtual address of the process header loaded into memory relative to the first loaded segment
@@ -311,11 +310,15 @@ int load_alloc_segments(bin_info_table_T* bin_infos) {
          * This logic only runs once
          */
         if (first_pt_load && bin_infos->isPIE) {
-            first_pt_load = false;  //
+            first_pt_load = false;
+            bin_infos->allocd_segs_len++;
 
             // allocate space for the one pointer that will point to the mapped memory region
-            if (NULL == (bin_infos->allocd_segments = calloc(1, sizeof(segment_item_T))))
+            if (0 > realloc_array((void**)&bin_infos->allocd_segments, &bin_infos->allocd_segs_len, sizeof(segment_item_T)))
                 JMP_W_CERROR("Realloc failed on segment-mapping-address array", ret)
+
+            // set this value early to have correct error handling in case the mapping fails
+            bin_infos->allocd_segments[0].segment_size = bin_infos->total_mapping_size;
 
             /*
              * Map the whole virtual memory of the program image.
@@ -331,10 +334,7 @@ int load_alloc_segments(bin_info_table_T* bin_infos) {
                 DEBUG("Successfully created memory mapping at address %p with size %lu", (void*)pa,
                     bin_infos->total_mapping_size);
                 bin_infos->load_bias = (Elf64_Addr)pa + phdr_entry.p_vaddr;
-                bin_infos->allocd_segments[0] = (segment_item_T){
-                    .segment_ptr = pa, .segment_size = bin_infos->total_mapping_size
-                };
-                bin_infos->allocd_segs_len++;
+                bin_infos->allocd_segments[0].segment_ptr = pa;
             }
         }
 
@@ -353,7 +353,6 @@ int load_alloc_segments(bin_info_table_T* bin_infos) {
         const Elf64_Addr page_start = ALIGN_TO_PAGE_DOWN(bin_infos->load_bias + phdr_entry.p_vaddr, bin_infos->elf_page_size);
         const Elf64_Addr page_offset = bin_infos->load_bias + phdr_entry.p_vaddr - page_start;
         const Elf64_Addr mapping_size = page_offset + phdr_entry.p_memsz;
-        bin_infos->last_mapping_size = mapping_size;
 
         /* If it's a normal executable, map every segment separately */
         if (!bin_infos->isPIE) {
@@ -361,6 +360,8 @@ int load_alloc_segments(bin_info_table_T* bin_infos) {
             bin_infos->allocd_segs_len++;  // increase the length index
             if (0 > realloc_array((void**)&bin_infos->allocd_segments, &bin_infos->allocd_segs_len, sizeof(segment_item_T)))
                 JMP_W_CERROR("Realloc failed on segment-mapping-address array", ret)
+            // set this value early to have correct error handling in case the mapping fails
+            bin_infos->allocd_segments[bin_infos->allocd_segs_len-1].segment_size = mapping_size;
 
             /* map the corresponding memory region */
             // always set the protection of the mapping to write, cause we still have to write the segment data
@@ -368,21 +369,22 @@ int load_alloc_segments(bin_info_table_T* bin_infos) {
                 MAP_PRIVATE | MAP_ANONYMOUS | MAP_FIXED, -1, 0);
 
             if (MAP_FAILED != pa) {
-                bin_infos->allocd_segments[bin_infos->allocd_segs_len-1] = (segment_item_T){
-                    .segment_ptr = pa, .segment_size = mapping_size
-                };
+                bin_infos->allocd_segments[bin_infos->allocd_segs_len-1].segment_ptr = pa;
                 if (pa != (void*)page_start)
                     JMP_W_CERROR("Failed to allocate memory for segment at correct address. \n"
                                  "Provided addr by mmap: %p vs. calculated addr from hdr: %p", ret, pa, (void*)page_start)
 
-                DEBUG("Successfully created memory mapping at address %p with size %lu", (void*)pa, mapping_size);
+                DEBUG("Successfully created memory mapping at address %p with size %lu", (void*)pa,
+                    bin_infos->allocd_segments[bin_infos->allocd_segs_len-1].segment_size);
                 fflush(stdout);
             }
         }
 
         if (MAP_FAILED == pa) {
             PRINT_CUSTOM_ERROR("Failed to allocate memory at address %p with size %lu",
-                bin_infos->allocd_segments[bin_infos->allocd_segs_len-1].segment_ptr, bin_infos->last_mapping_size);
+                bin_infos->allocd_segments[bin_infos->allocd_segs_len-1].segment_ptr,
+                bin_infos->allocd_segments[bin_infos->allocd_segs_len-1].segment_size
+                );
             PRINT_ERROR("Error from mmap");
             goto ret;
         }
@@ -439,7 +441,8 @@ int create_initial_stack(bin_info_table_T* bin_infos, const int argc, char** arg
          * duplication but this is inevitable
          */
         Elf64_Addr new_page_start = (Elf64_Addr) bin_infos->allocd_segments[bin_infos->allocd_segs_len-1].segment_ptr;
-        new_page_start = new_page_start + bin_infos->last_mapping_size;  // add to the previous addr the mapping size
+        new_page_start = new_page_start +
+            bin_infos->allocd_segments[bin_infos->allocd_segs_len-1].segment_size;  // add to the previous addr the mapping size
         new_page_start = ALIGN_TO_PAGE_UP(new_page_start, bin_infos->elf_page_size);  // make it page aligned
         pa = mmap((void*)new_page_start, DEFAULT_STACK_SIZE, stack_flags,
                 MAP_PRIVATE | MAP_ANONYMOUS | MAP_FIXED_NOREPLACE, -1, 0);
