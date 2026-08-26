@@ -41,12 +41,12 @@ if __name__ == '__main__':
     text = f"| Testing {test_binary} as no PIE |"
     print(f"\n{'-' * (len(text)) + '\n'}{text}\n{'-' * (len(text)) + '\n'}")
     subprocess.run(['gcc', '-static', '-fno-PIE', '-no-pie', test_src_file, "-o", test_binary], check=True)
-    subprocess.run(["./main", test_binary, *sys.argv[2:]])
+    subprocess.run(["./loader", test_binary, *sys.argv[2:]])
 
     # compile the PIE variant:
     text = f"| Testing {test_binary} as PIE |"
     print(f"\n{'-' * (len(text)) + '\n'}{text}\n{'-' * (len(text)) + '\n'}")
     subprocess.run(['gcc', '-fPIE', '-static-pie', test_src_file, "-o", test_binary], check=True)
-    subprocess.run(["./main", test_binary, *sys.argv[2:]])
+    subprocess.run(["./loader", test_binary, *sys.argv[2:]])
 
     #os.rmdir(build_path)
