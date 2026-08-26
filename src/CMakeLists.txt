@@ -19,6 +19,7 @@ target_compile_options(main PRIVATE
         -Wextra
         -Werror
         -pedantic
+        -DDEBUG
         >
 )
 
