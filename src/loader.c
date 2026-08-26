@@ -251,7 +251,7 @@ void calc_phdr_vals(bin_info_table_T* bin_infos, const Elf64_Xword default_page_
     // If the page size specified in the elf turns out to be not equal to the system page size, redo the calculations
     // This should always be true once --> there should never be more than one recursion!
     if (default_page_sz != bin_infos->elf_page_size) {
-        DEBUG("Recursive call on function calc_phdr_vals!")
+        DEBUG("Recursive call on function calc_phdr_vals!");
         calc_phdr_vals(bin_infos, bin_infos->elf_page_size);  // this should never result in another recursive call
         return;  // skip the below code
     }
@@ -552,7 +552,7 @@ int create_initial_stack(bin_info_table_T* bin_infos, const int argc, char** arg
  * @param bin_infos Pointer to data field for storing and retrieving information
  */
 void loader_cleanup(bin_info_table_T* bin_infos) {
-    DEBUG("Cleaning up loader internal stuff")
+    DEBUG("Cleaning up loader internal stuff");
     free(bin_infos->prog_header_table);
     bin_infos->prog_header_table = nullptr;
     free(bin_infos->elf_header);
@@ -569,7 +569,7 @@ void loader_cleanup(bin_info_table_T* bin_infos) {
  * @param bin_infos Pointer to data field for storing and retrieving information
  */
 void proc_img_cleanup(const bin_info_table_T* bin_infos) {
-    DEBUG("Cleaning up new process image")
+    DEBUG("Cleaning up new process image");
     if (nullptr == bin_infos->allocd_segments) goto allocd_segs_free_end;
     for (int i = 0; i<bin_infos->allocd_segs_len; i++) {
         if (MAP_FAILED != bin_infos->allocd_segments[i].segment_ptr)

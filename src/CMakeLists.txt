@@ -19,10 +19,10 @@ target_compile_options(loader PRIVATE
         -Wextra
         -Werror
         -pedantic
-        -DDEBUG
         >
 )
 
 target_compile_definitions(loader PRIVATE
         FILE_OFFSET_BITS=64
+        ENABLE_DEBUG
 )

@@ -47,15 +47,17 @@ extern ssize_t memcpy_n(void* dest, const void* src);
 } while (0);
 
 /*
- * If the DEBUG flag was passed to the compiler,
- * the DEBUG macro prints debug information; Else it just gets ignored.
+ * If the ENABLE_DEBUG flag was passed to the compiler,
+ * the DEBUG macro prints debug information; Else it does nothing.
  * As the variadic arguments the format specifier for printf can be specified
  */
-#ifdef DEBUG
-#undef DEBUG
-#define DEBUG(FORMAT_STR, ...) {printf(FORMAT_STR, ##__VA_ARGS__); putchar('\n');}
+#ifdef ENABLE_DEBUG
+#define DEBUG(FORMAT_STR, ...) do { \
+    printf(FORMAT_STR __VA_OPT__(,) __VA_ARGS__); \
+    putchar('\n'); \
+} while (0)
 #else
-#define DEBUG(FORMAT_STR, ...)
+#define DEBUG(FORMAT_STR, ...) do {} while(0)
 #endif
 
 /* Push a value VAL onto the stack, pointed to by the stack pointer SP and increment SP by 8-Bytes!

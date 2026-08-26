@@ -52,7 +52,8 @@ void foo(){...}
 ```
 
 ### Debugging
-To enable debugging-messages in the program, pass the DEBUG flag via `-DDEBUG` to the compiler
+To enable debugging-messages in the program, pass the `ENABLE_DEBUG` flag via the `target_compile_definitions` in the 
+`CMakeLists.txt` to the compiler. This is enabled by default.
 
 ### Testing
 To test the loaders capability of loading certain C-programs, the python script under `src/test_loader.py` can be used. For detailed instructions on the usage, see the docstring in the beginning of the file itself. 
