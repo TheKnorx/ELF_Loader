@@ -589,7 +589,7 @@ void proc_img_cleanup(const bin_info_table_T* bin_infos) {
 int main(const int argc, char **argv) {
     DEBUG("Entering main");
     if (argc < 2) {
-        printf("Usage: %s <path/to/ELF/binary>\n", *argv);
+        printf("Usage: %s <path/to/ELF/binary> [args]\n", *argv);
         return 0;
     }
     srand(time(nullptr));
