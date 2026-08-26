@@ -14,7 +14,7 @@
 #include <limits.h>
 #include <fcntl.h>
 
-#include "main.h"
+#include "loader.h"
 
 typedef struct segment_item_S {
     void*       segment_ptr;    // pointer to mapped segment
